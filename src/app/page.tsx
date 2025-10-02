@@ -1,123 +1,210 @@
 "use client";
 
-import { useState } from 'react';
+import { useState, useEffect, useRef } from 'react';
+import { Monitor, Settings, Users, Bot, KeyRound, Briefcase, Target, Archive } from "lucide-react";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Button } from "@/components/ui/button";
+import { Textarea } from "@/components/ui/textarea";
 
-// The sub-sections available on Naukri's "Recommended Jobs" page
+// Import the new page views
+import { AgentLogsPage } from './views/agent-logs';
+import { SettingsPage } from './views/settings';
+
 const JOB_SECTIONS = ["Profile", "Top Candidate", "Preferences", "You Might Like"];
 
-export default function HomePage() {
+// The main dashboard UI is now its own component
+function CommandCenter() {
   const [naukriCookie, setNaukriCookie] = useState("");
   const [selectedSection, setSelectedSection] = useState(JOB_SECTIONS[0]);
-  const [logs, setLogs] = useState<string[]>([]);
+  const [logs, setLogs] = useState<string[]>(['[SYSTEM] Standby. Awaiting mission parameters...']);
   const [isLoading, setIsLoading] = useState(false);
+  const logsEndRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    logsEndRef.current?.scrollIntoView({ behavior: "smooth" });
+  }, [logs]);
 
   const handleStartAutomation = async () => {
     if (!naukriCookie) {
-      setLogs(prev => [...prev, "ERROR: Naukri session cookie is required."]);
+      setLogs(prev => [...prev, "[ERROR] AGENT_AUTH_TOKEN required for deployment."]);
       return;
     }
     
     setIsLoading(true);
-    setLogs([`[${new Date().toLocaleTimeString()}] Starting automation for '${selectedSection}' section...`]);
+    setLogs([`[INIT] Mission started for sector '${selectedSection}'. Deploying agent...`]);
 
     try {
       const response = await fetch('/api/start-automation', {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          cookie: naukriCookie,
-          section: selectedSection,
-        }),
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ cookie: naukriCookie, section: selectedSection }),
       });
 
-      if (!response.ok) {
-        const errorData = await response.json();
-        throw new Error(errorData.error || "An unknown error occurred.");
+      if (!response.body) throw new Error("Response stream not available.");
+
+      const reader = response.body.getReader();
+      const decoder = new TextDecoder();
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        const chunk = decoder.decode(value, { stream: true });
+        setLogs(prev => [...prev, ...chunk.split('\n').filter(Boolean)]);
       }
-
-      // We will implement a streaming response later for real-time logs.
-      // For now, we just get the final result.
-      const result = await response.json();
-      setLogs(prev => [...prev, ...result.logs, `[${new Date().toLocaleTimeString()}] ${result.summary}`]);
-
     } catch (error: any) {
-      setLogs(prev => [...prev, `[${new Date().toLocaleTimeString()}] FATAL: ${error.message}`]);
+      setLogs(prev => [...prev, `[FATAL] ${error.message}`]);
     } finally {
       setIsLoading(false);
+      setLogs(prev => [...prev, `[END] Mission concluded. Agent returned.`]);
     }
   };
 
   return (
-    <main className="container mx-auto p-4 md:p-8">
-      <div className="border border-gray-700 rounded-lg shadow-lg max-w-4xl mx-auto">
-        {/* Header */}
-        <div className="p-4 border-b border-gray-700 bg-gray-900/50 rounded-t-lg">
-          <h1 className="text-xl font-bold text-green-400">Naukri.com Automation Dashboard</h1>
-          <p className="text-sm text-gray-400">One-click job application bot</p>
-        </div>
-
-        {/* Controls */}
-        <div className="p-4 space-y-4">
-          <div>
-            <label htmlFor="cookie" className="block text-sm font-medium text-gray-300 mb-2">
-              Naukri Session Cookie
-            </label>
-            <textarea
-              id="cookie"
-              rows={3}
-              className="w-full bg-gray-900 border border-gray-600 rounded-md p-2 text-sm text-gray-200 focus:ring-2 focus:ring-green-500 focus:border-green-500"
-              placeholder="Paste your 'AUTH_COOKIE' value here..."
-              value={naukriCookie}
-              onChange={(e) => setNaukriCookie(e.target.value)}
-            />
-          </div>
-
-          <div>
-            <label className="block text-sm font-medium text-gray-300 mb-2">Target Section</label>
-            <div className="flex flex-wrap gap-2">
+    <div className="flex-1 overflow-hidden p-6 flex flex-col gap-6">
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+          <Card className="bg-neutral-900 border-neutral-800 flex flex-col">
+            <CardHeader>
+              <CardTitle className="text-sm font-medium text-neutral-300 tracking-wider flex items-center gap-2"><KeyRound className="w-4 h-4 text-orange-500"/>AGENT AUTH TOKEN</CardTitle>
+            </CardHeader>
+            <CardContent className="flex-grow">
+                <Textarea
+                id="cookie"
+                className="h-full resize-none bg-neutral-950 border-neutral-700 text-green-400 placeholder:text-neutral-500 focus:ring-orange-500"
+                placeholder="Paste nauk_at cookie..."
+                value={naukriCookie}
+                onChange={(e) => setNaukriCookie(e.target.value)}
+              />
+            </CardContent>
+          </Card>
+          <Card className="bg-neutral-900 border-neutral-800 flex flex-col">
+            <CardHeader>
+              <CardTitle className="text-sm font-medium text-neutral-300 tracking-wider flex items-center gap-2"><Briefcase className="w-4 h-4 text-orange-500"/>TARGET SECTOR</CardTitle>
+            </CardHeader>
+            <CardContent className="grid grid-cols-2 gap-2 flex-grow">
               {JOB_SECTIONS.map(section => (
-                <button
-                  key={section}
-                  onClick={() => setSelectedSection(section)}
-                  className={`px-3 py-1.5 text-sm rounded-md transition-colors ${
-                    selectedSection === section
-                      ? 'bg-green-600 text-white shadow-md'
-                      : 'bg-gray-700 text-gray-300 hover:bg-gray-600'
-                  }`}
+                <Button key={section} variant="outline" onClick={() => setSelectedSection(section)}
+                  className={`justify-center text-xs h-full ${ selectedSection === section ? 'bg-orange-500/20 border-orange-500/50 text-orange-300' : 'border-neutral-700 text-neutral-400 hover:bg-neutral-800 hover:text-neutral-300 bg-transparent'}`}
                 >
-                  {section}
-                </button>
+                  {section.toUpperCase()}
+                </Button>
               ))}
-            </div>
-          </div>
-          
-          <button
-            onClick={handleStartAutomation}
-            disabled={isLoading}
-            className="w-full bg-green-600 text-white font-bold py-2 px-4 rounded-md hover:bg-green-700 disabled:bg-gray-500 disabled:cursor-not-allowed transition-colors"
-          >
-            {isLoading ? "Running..." : "Start Automation"}
-          </button>
+            </CardContent>
+          </Card>
+          <Card className="bg-neutral-900 border-neutral-800 flex flex-col">
+            <CardHeader>
+                <CardTitle className="text-sm font-medium text-neutral-300 tracking-wider flex items-center gap-2"><Target className="w-4 h-4 text-orange-500"/>MISSION CONTROL</CardTitle>
+            </CardHeader>
+            <CardContent className="flex flex-col gap-4 flex-grow justify-between">
+                <div className="text-xs text-neutral-400 border border-neutral-800 bg-neutral-950 p-3 rounded-md space-y-1">
+                  <p>TARGET: <span className="text-orange-400">{selectedSection.toUpperCase()}</span></p>
+                  <p>STATUS: <span className="text-white">{isLoading ? 'ACTIVE' : 'STANDBY'}</span></p>
+                </div>
+                  <Button onClick={handleStartAutomation} disabled={isLoading}
+                    className="w-full h-12 bg-orange-600 text-white font-bold hover:bg-orange-700 disabled:bg-neutral-700 disabled:text-neutral-400 disabled:cursor-not-allowed transition-colors text-sm tracking-widest"
+                  >
+                    {isLoading ? "IN PROGRESS..." : "INITIATE MISSION"}
+                </Button>
+            </CardContent>
+          </Card>
         </div>
+        <Card className="bg-neutral-900 border-neutral-800 flex-grow flex flex-col">
+          <CardHeader>
+              <CardTitle className="text-sm font-medium text-neutral-300 tracking-wider flex items-center gap-2"><Bot className="w-4 h-4 text-orange-500"/>LIVE MISSION FEED</CardTitle>
+          </CardHeader>
+          <CardContent className="flex-grow overflow-hidden">
+              <div id="system-log" className="h-full text-xs overflow-y-auto pr-2 space-y-2 font-mono">
+                  {logs.map((log, index) => {
+                  const color = log.includes('ERROR') || log.includes('FATAL') ? 'text-red-400' : log.includes('WARN') ? 'text-yellow-400' : log.includes('SUCCESS') ? 'text-green-400' : log.includes('[INIT]') || log.includes('[END]') ? 'text-orange-400' : 'text-neutral-400';
+                  return (
+                      <p key={index} className="whitespace-pre-wrap">
+                        <span className="text-neutral-600 mr-2">&gt;</span>
+                        <span className={color}>{log}</span>
+                      </p>
+                  );
+                  })}
+                  {isLoading && <p className="text-yellow-400 animate-pulse"> &gt; Agent active. Awaiting field response...</p>}
+                  <div ref={logsEndRef} />
+              </div>
+          </CardContent>
+        </Card>
+    </div>
+  )
+}
 
-        {/* Terminal Log */}
-        <div className="bg-black rounded-b-lg p-4 h-80 overflow-y-auto">
-          <div className="font-mono text-sm">
-            {logs.map((log, index) => (
-              <p key={index} className={`whitespace-pre-wrap ${log.includes('ERROR') || log.includes('FATAL') ? 'text-red-400' : 'text-green-400'}`}>
-                <span className="text-gray-500 mr-2">{`>`}</span>{log}
-              </p>
+
+export default function TacticalDashboard() {
+  const [activeSection, setActiveSection] = useState("center");
+  const [currentTime, setCurrentTime] = useState("...");
+
+  useEffect(() => {
+    const intervalId = setInterval(() => {
+      setCurrentTime(new Date().toUTCString());
+    }, 1000);
+    return () => clearInterval(intervalId);
+  }, []);
+
+  const navItems = [
+    { id: 'center', label: 'COMMAND CENTER', icon: Monitor },
+    { id: 'logs', label: 'AGENT LOGS', icon: Archive },
+    { id: 'settings', label: 'SETTINGS', icon: Settings },
+  ]
+
+  const renderContent = () => {
+    switch(activeSection) {
+      case 'center':
+        return <CommandCenter />;
+      case 'logs':
+        return <AgentLogsPage />;
+      case 'settings':
+        return <SettingsPage />;
+      default:
+        return <CommandCenter />;
+    }
+  }
+
+  return (
+    <div className="flex h-screen bg-neutral-950 text-neutral-100">
+      {/* Sidebar */}
+      <div className="w-72 bg-neutral-900 border-r border-neutral-800 flex-col h-full hidden lg:flex">
+        <div className="p-4 border-b border-neutral-800">
+          <h1 className="text-orange-500 font-bold text-lg tracking-wider">NAUKRI OPS</h1>
+          <p className="text-neutral-500 text-xs">v1.0.0 / AUTOMATOR</p>
+        </div>
+        <nav className="flex-grow p-4 space-y-2">
+            {navItems.map(item => (
+              <button key={item.id} onClick={() => setActiveSection(item.id)}
+                className={`w-full flex items-center gap-3 p-3 rounded transition-colors text-left ${activeSection === item.id ? 'bg-orange-500/10 text-orange-400 border border-orange-500/30' : 'text-neutral-400 hover:text-white hover:bg-neutral-800'}`}
+              >
+                  <item.icon className="w-5 h-5" />
+                  <span className="text-sm font-medium">{item.label}</span>
+              </button>
             ))}
-            {isLoading && (
-               <p className="text-green-400 animate-pulse">
-                 <span className="text-gray-500 mr-2">{`>`}</span>Waiting for logs...
-               </p>
-            )}
+        </nav>
+        <div className="p-4 border-t border-neutral-800">
+          <div className="p-4 bg-neutral-800 border border-neutral-700 rounded">
+            <div className="flex items-center gap-2 mb-2">
+              <div className="w-2 h-2 rounded-full animate-pulse bg-green-500"></div>
+              <span className="text-xs text-green-400">SYSTEM ONLINE</span>
+            </div>
+            <div className="text-xs text-neutral-500">
+              <div>LAST RUN: N/A</div>
+              <div>JOBS APPLIED: 0</div>
+            </div>
           </div>
         </div>
       </div>
-    </main>
+
+      {/* Main Content */}
+      <main className="flex-1 flex flex-col">
+        <div className="h-16 bg-neutral-900 border-b border-neutral-800 flex items-center justify-between px-6 flex-shrink-0">
+            <div className="text-sm text-neutral-400">
+              TACTICAL COMMAND / <span className="text-orange-500">{navItems.find(i => i.id === activeSection)?.label}</span>
+            </div>
+            <div className="text-xs text-neutral-500">
+              LAST SYNC: {currentTime}
+            </div>
+        </div>
+        {renderContent()}
+      </main>
+    </div>
   );
 }
