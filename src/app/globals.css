@@ -1,25 +1,62 @@
+/* Tactical Ops UI Styles */
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
 
+:root {
+  --background-start-rgb: 10, 11, 13;
+  --background-end-rgb: 23, 25, 30;
+  --accent-color: 255, 107, 0; /* Tactical Orange */
+  --border-color: rgba(var(--accent-color), 0.2);
+  --text-primary: #EAEAEA;
+  --text-secondary: #9B9B9B;
+  --panel-bg: #111317;
+}
+
 body {
-  background-color: #0D1117;
-  color: #C9D1D9;
-  font-family: var(--font-geist-mono), monospace;
+  color: var(--text-primary);
+  background: linear-gradient(
+      to bottom,
+      transparent,
+      rgb(var(--background-end-rgb))
+    )
+    rgb(var(--background-start-rgb));
+  font-family: 'Roboto Mono', monospace, var(--font-geist-mono);
 }
 
-/* Simple fade-in animation for new log entries */
+.text-accent {
+  color: rgb(var(--accent-color));
+}
+
+.border-accent {
+  border-color: var(--border-color);
+}
+
+.bg-accent {
+  background-color: rgb(var(--accent-color));
+}
+
+/* Custom scrollbar for a more thematic look */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: rgba(var(--accent-color), 0.3);
+  border-radius: 3px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: rgba(var(--accent-color), 0.5);
+}
+
+/* Animation for log entries */
 @keyframes fadeIn {
-  from {
-    opacity: 0;
-    transform: translateY(5px);
-  }
-  to {
-    opacity: 1;
-    transform: translateY(0);
-  }
+  from { opacity: 0; transform: translateY(5px); }
+  to { opacity: 1; transform: translateY(0); }
 }
-
 .log-entry {
   animation: fadeIn 0.3s ease-out;
 }
