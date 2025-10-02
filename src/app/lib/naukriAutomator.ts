@@ -1,4 +1,4 @@
-import playwright from 'playwright-core';
+import core from 'playwright-core';
 import chromium from '@sparticuz/chromium';
 
 interface AutomationParams {
@@ -7,61 +7,63 @@ interface AutomationParams {
   log: (message: string) => void;
 }
 
-// Revised selectors based on your provided HTML
 const SELECTORS = {
   recommendedJobsUrl: 'https://www.naukri.com/mnjuser/recommendedjobs',
-  // The section tabs are likely still buttons with a title attribute, but confirm if this fails.
-  jobSectionTab: (section: string) => `button[title="${section}"]`,
-  // The article element for each job listing
   jobArticle: 'article.jobTuple',
-  // The clickable icon for the checkbox within a job article
-  jobCheckbox: 'i.naukicon-ot-checkbox',
-  // The main apply button that appears after selections
+  jobCheckbox: 'div.tuple-check-box',
   applyButton: 'button.multi-apply-button',
-  // The container for the success message text
   successToast: 'span.apply-message',
-  // The sidebar container for additional questions
   sidebarForm: 'div.chatbot_Drawer'
 };
 
 export async function runNaukriAutomation({ cookie, section, log }: AutomationParams) {
-  let browser: playwright.Browser | null = null;
+  let browser: core.Browser | null = null;
+  let page: core.Page | null = null;
   try {
-    log('Launching browser...');
-    browser = await playwright.chromium.launch({
-      args: chromium.args,
-      executablePath: await chromium.executablePath(),
-      // @ts-expect-error
-      headless: chromium.headless,
-    });
+    log('Preparing browser...');
+    
+    const isProduction = process.env.NODE_ENV === 'production';
+
+    if (isProduction) {
+        log('Running in production mode, using serverless chromium...');
+        // In production, we use playwright-core and provide the browser from @sparticuz/chromium
+        browser = await core.chromium.launch({
+            args: chromium.args,
+            executablePath: await chromium.executablePath(),
+            // FIX #1: Suppress the known type error for the 'headless' property
+            // @ts-expect-error
+            headless: chromium.headless,
+        });
+    } else {
+        log('Running in development mode, using local chromium...');
+        // In development, we use the full playwright package to find the local browser
+        const playwright = await import('playwright');
+        browser = await playwright.chromium.launch({
+            headless: false,
+        });
+    }
+
+    // FIX #2: Add a check to ensure the browser launched successfully, which resolves the "'browser' is possibly 'null'" error.
+    if (!browser) {
+      throw new Error("Browser instance could not be launched.");
+    }
 
     const context = await browser.newContext();
-    const page = await context.newPage();
+    page = await context.newPage();
 
     log('Setting session cookie...');
     await context.addCookies([
-      {
-        name: 'nauk_at',
-        value: cookie,
-        domain: '.naukri.com',
-        path: '/',
-      },
+      { name: 'nauk_at', value: cookie, domain: '.naukri.com', path: '/' },
     ]);
 
     log(`Navigating to Recommended Jobs page...`);
-    await page.goto(SELECTORS.recommendedJobsUrl, { waitUntil: 'domcontentloaded' });
-
-    log(`Waiting for page to load and selecting '${section}' tab...`);
-    // This might need a more robust waiter, but let's try this first.
-    await page.waitForSelector(SELECTORS.jobArticle, { timeout: 10000 });
+    await page.goto(SELECTORS.recommendedJobsUrl);
     
-    // The tab switching logic might need adjustment if it's not a button with a title.
-    // For now, we assume it is.
-    // await page.click(SELECTORS.jobSectionTab(section));
-    
-    // An alternative way to click the tab by finding the text content
-    await page.getByRole('button', { name: section, exact: true }).click();
+    log('Waiting for initial job listings to load...');
+    await page.waitForSelector(SELECTORS.jobArticle, { timeout: 15000 });
 
+    log(`Selecting '${section}' tab...`);
+    await page.locator(`text=${section}`).first().click();
 
     log('Waiting for jobs to reload after tab switch...');
     await page.waitForTimeout(3000); 
@@ -69,25 +71,28 @@ export async function runNaukriAutomation({ cookie, section, log }: AutomationPa
     log('Finding job listings...');
     const jobArticles = await page.locator(SELECTORS.jobArticle).all();
     if (jobArticles.length === 0) {
-      throw new Error('No job articles found. The page might have changed or the selectors are incorrect.');
+      throw new Error('No job articles found after tab switch.');
     }
 
     const jobsToSelect = jobArticles.slice(0, 5);
-    
-    log(`Found ${jobArticles.length} jobs. Selecting the first ${jobsToSelect.length}...`);
+    log(`Found ${jobArticles.length} jobs. Attempting to select the first ${jobsToSelect.length}...`);
 
-    for (const job of jobsToSelect) {
+    for (let i = 0; i < jobsToSelect.length; i++) {
+      const job = jobsToSelect[i];
+      log(`   - Selecting checkbox for job #${i + 1}...`);
       const checkbox = job.locator(SELECTORS.jobCheckbox);
       if (await checkbox.isVisible()) {
         await checkbox.click();
-        await page.waitForTimeout(250); // Small delay
+        await page.waitForTimeout(250);
+      } else {
+        log(`   - WARN: Checkbox for job #${i + 1} was not visible.`);
       }
     }
 
     log('Clicking the main "Apply" button...');
     const applyButton = page.locator(SELECTORS.applyButton);
-    if (!await applyButton.isVisible()) {
-      throw new Error('"Apply" button not found. It may not have appeared after selecting jobs.');
+    if (!await applyButton.isVisible({ timeout: 5000 })) {
+      throw new Error('"Apply" button did not appear after selecting jobs.');
     }
     await applyButton.click();
     
@@ -96,14 +101,12 @@ export async function runNaukriAutomation({ cookie, section, log }: AutomationPa
     const successLocator = page.locator(SELECTORS.successToast);
     const sidebarLocator = page.locator(SELECTORS.sidebarForm);
 
-    // Promise.race waits for the first locator to become visible
     const result = await Promise.race([
       successLocator.waitFor({ state: 'visible', timeout: 20000 }).then(() => 'success'),
       sidebarLocator.waitFor({ state: 'visible', timeout: 20000 }).then(() => 'sidebar'),
     ]).catch(() => {
-        throw new Error("Timed out waiting for a success message or the questions sidebar. The application may have failed silently.");
+        throw new Error("Timed out waiting for a success message or the questions sidebar.");
     });
-
 
     if (result === 'success') {
       const successText = await successLocator.innerText();
@@ -114,6 +117,11 @@ export async function runNaukriAutomation({ cookie, section, log }: AutomationPa
 
   } catch (error: any) {
     log(`ERROR: ${error.message}`);
+    if (page) {
+      log('Taking screenshot of the error page...');
+      await page.screenshot({ path: 'error-screenshot.png' });
+      log('Screenshot saved as error-screenshot.png');
+    }
     throw error;
   } finally {
     if (browser) {
