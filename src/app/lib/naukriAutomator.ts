@@ -26,24 +26,19 @@ export async function runNaukriAutomation({ cookie, section, log }: AutomationPa
 
     if (isProduction) {
         log('Running in production mode, using serverless chromium...');
-        // In production, we use playwright-core and provide the browser from @sparticuz/chromium
         browser = await core.chromium.launch({
             args: chromium.args,
             executablePath: await chromium.executablePath(),
-            // FIX #1: Suppress the known type error for the 'headless' property
-            // @ts-expect-error
             headless: chromium.headless,
         });
     } else {
         log('Running in development mode, using local chromium...');
-        // In development, we use the full playwright package to find the local browser
         const playwright = await import('playwright');
         browser = await playwright.chromium.launch({
             headless: false,
         });
     }
 
-    // FIX #2: Add a check to ensure the browser launched successfully, which resolves the "'browser' is possibly 'null'" error.
     if (!browser) {
       throw new Error("Browser instance could not be launched.");
     }
@@ -59,8 +54,13 @@ export async function runNaukriAutomation({ cookie, section, log }: AutomationPa
     log(`Navigating to Recommended Jobs page...`);
     await page.goto(SELECTORS.recommendedJobsUrl);
     
+    // Add enhanced logging to help debug authentication issues on Vercel
+    log(`Current page URL: ${page.url()}`);
+    log(`Current page title: "${await page.title()}"`);
+
     log('Waiting for initial job listings to load...');
-    await page.waitForSelector(SELECTORS.jobArticle, { timeout: 15000 });
+    // Increased timeout to 30 seconds for serverless cold starts
+    await page.waitForSelector(SELECTORS.jobArticle, { timeout: 30000 });
 
     log(`Selecting '${section}' tab...`);
     await page.locator(`text=${section}`).first().click();
@@ -119,8 +119,9 @@ export async function runNaukriAutomation({ cookie, section, log }: AutomationPa
     log(`ERROR: ${error.message}`);
     if (page) {
       log('Taking screenshot of the error page...');
-      await page.screenshot({ path: 'error-screenshot.png' });
-      log('Screenshot saved as error-screenshot.png');
+      // Save screenshot to the /tmp directory, which is writable on Vercel
+      await page.screenshot({ path: '/tmp/error-screenshot.png' });
+      log('Screenshot saved to /tmp/error-screenshot.png (not accessible in logs).');
     }
     throw error;
   } finally {
