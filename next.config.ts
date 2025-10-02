@@ -1,8 +1,8 @@
 import type { NextConfig } from "next";
 
 const nextConfig: NextConfig = {
-  // Use the new property name as suggested by the warning message
-  serverExternalPackages: ['@sparticuz/chromium'],
+  // Add playwright to the list of server-external packages
+  serverExternalPackages: ['@sparticuz/chromium', 'playwright'],
 };
 
 export default nextConfig;
