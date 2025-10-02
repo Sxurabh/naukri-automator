@@ -5,5 +5,21 @@
 body {
   background-color: #0D1117;
   color: #C9D1D9;
-  font-family: 'Courier New', Courier, monospace;
+  font-family: var(--font-geist-mono), monospace;
+}
+
+/* Simple fade-in animation for new log entries */
+@keyframes fadeIn {
+  from {
+    opacity: 0;
+    transform: translateY(5px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.log-entry {
+  animation: fadeIn 0.3s ease-out;
 }
