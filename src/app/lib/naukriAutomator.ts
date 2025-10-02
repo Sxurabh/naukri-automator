@@ -13,7 +13,8 @@ const SELECTORS = {
   jobCheckbox: 'div.tuple-check-box',
   applyButton: 'button.multi-apply-button',
   successToast: 'span.apply-message',
-  sidebarForm: 'div.chatbot_Drawer'
+  sidebarForm: 'div.chatbot_Drawer',
+  sidebarCloseIcon: 'div.chatBot-ic-cross',
 };
 
 export async function runNaukriAutomation({ cookie, section, log }: AutomationParams) {
@@ -29,7 +30,6 @@ export async function runNaukriAutomation({ cookie, section, log }: AutomationPa
         browser = await core.chromium.launch({
             args: chromium.args,
             executablePath: await chromium.executablePath(),
-            // FIX: Set headless to true directly for production builds to satisfy TypeScript.
             headless: true,
         });
     } else {
@@ -67,52 +67,97 @@ export async function runNaukriAutomation({ cookie, section, log }: AutomationPa
     log('Waiting for jobs to reload after tab switch...');
     await page.waitForTimeout(3000); 
 
-    log('Finding job listings...');
-    const jobArticles = await page.locator(SELECTORS.jobArticle).all();
-    if (jobArticles.length === 0) {
-      throw new Error('No job articles found after tab switch.');
+    log('Starting batch application process...');
+    let totalAppliedCount = 0;
+    const BATCH_SIZE = 5;
+
+    while (true) {
+        log('Searching for available jobs for the next batch...');
+        const availableJobs = await page.locator(SELECTORS.jobArticle).all();
+
+        if (availableJobs.length === 0) {
+            log('No more jobs found to apply to.');
+            break;
+        }
+
+        const jobsInBatch = availableJobs.slice(0, BATCH_SIZE);
+        log(`Found ${availableJobs.length} jobs. Processing a batch of ${jobsInBatch.length}...`);
+
+        let selectedCountInBatch = 0;
+        for (const job of jobsInBatch) {
+            const checkbox = job.locator(SELECTORS.jobCheckbox);
+            if (await checkbox.isVisible()) {
+                await checkbox.click();
+                selectedCountInBatch++;
+                await page.waitForTimeout(250);
+            }
+        }
+
+        if (selectedCountInBatch === 0) {
+            log("No selectable jobs found in this batch. Ending automation.");
+            break; 
+        }
+        
+        log(`Selected ${selectedCountInBatch} jobs. Clicking the main "Apply" button...`);
+        const applyButton = page.locator(SELECTORS.applyButton);
+        if (!await applyButton.isVisible({ timeout: 5000 })) {
+            log('WARN: "Apply" button did not appear. Assuming all jobs are processed.');
+            break;
+        }
+        await applyButton.click();
+        
+        log('Waiting for application result...');
+        
+        const successLocator = page.locator(SELECTORS.successToast);
+        const sidebarLocator = page.locator(SELECTORS.sidebarForm);
+
+        const result = await Promise.race([
+          successLocator.waitFor({ state: 'visible', timeout: 20000 }).then(() => 'success'),
+          sidebarLocator.waitFor({ state: 'visible', timeout: 20000 }).then(() => 'sidebar'),
+        ]).catch(() => {
+            log("WARN: Timed out waiting for confirmation.");
+            return 'timeout'; 
+        });
+
+        if (result === 'success') {
+          const successText = await successLocator.innerText();
+          log(`SUCCESS: ${successText}`);
+          totalAppliedCount += selectedCountInBatch;
+        } else if (result === 'sidebar') {
+          log('SKIPPED: Sidebar detected. Eligible jobs in batch were applied. Closing to continue...');
+          totalAppliedCount += selectedCountInBatch;
+          const closeIcon = page.locator(SELECTORS.sidebarCloseIcon);
+          if (await closeIcon.isVisible({ timeout: 3000 })) {
+              await closeIcon.click();
+              log('Sidebar close icon clicked.');
+          } else {
+              log('WARN: Could not find sidebar close icon. Pressing Escape as fallback.');
+              await page.keyboard.press('Escape');
+          }
+        }
+
+        // --- NEW REFRESH LOGIC ---
+        log('Refreshing job list by re-selecting the tab...');
+        // Click another tab (if available) and then click back to force a refresh
+        const otherTab = await page.locator('div.tab').filter({ hasNotText: section }).first();
+        if (await otherTab.isVisible()) {
+            await otherTab.click();
+            await page.waitForTimeout(1000); // Brief wait
+        }
+        await page.locator(`text=${section}`).first().click();
+        
+        try {
+            await page.waitForSelector(SELECTORS.jobArticle, { timeout: 15000 });
+            log('Job list refreshed. Continuing to the next batch.');
+        } catch {
+            log('No job articles found after refresh. Assuming mission is complete.');
+            break;
+        }
     }
 
-    const jobsToSelect = jobArticles.slice(0, 5);
-    log(`Found ${jobArticles.length} jobs. Attempting to select the first ${jobsToSelect.length}...`);
-
-    for (let i = 0; i < jobsToSelect.length; i++) {
-      const job = jobsToSelect[i];
-      log(`   - Selecting checkbox for job #${i + 1}...`);
-      const checkbox = job.locator(SELECTORS.jobCheckbox);
-      if (await checkbox.isVisible()) {
-        await checkbox.click();
-        await page.waitForTimeout(250);
-      } else {
-        log(`   - WARN: Checkbox for job #${i + 1} was not visible.`);
-      }
-    }
-
-    log('Clicking the main "Apply" button...');
-    const applyButton = page.locator(SELECTORS.applyButton);
-    if (!await applyButton.isVisible({ timeout: 5000 })) {
-      throw new Error('"Apply" button did not appear after selecting jobs.');
-    }
-    await applyButton.click();
-    
-    log('Waiting for application result...');
-    
-    const successLocator = page.locator(SELECTORS.successToast);
-    const sidebarLocator = page.locator(SELECTORS.sidebarForm);
-
-    const result = await Promise.race([
-      successLocator.waitFor({ state: 'visible', timeout: 20000 }).then(() => 'success'),
-      sidebarLocator.waitFor({ state: 'visible', timeout: 20000 }).then(() => 'sidebar'),
-    ]).catch(() => {
-        throw new Error("Timed out waiting for a success message or the questions sidebar.");
-    });
-
-    if (result === 'success') {
-      const successText = await successLocator.innerText();
-      log(`SUCCESS: ${successText}`);
-    } else if (result === 'sidebar') {
-      log('SKIPPED: Sidebar with custom questions appeared.');
-    }
+    log(`--- MISSION SUMMARY ---`);
+    log(`Batch application complete.`);
+    log(`Total jobs successfully applied to in this session: ${totalAppliedCount}`);
 
   } catch (error: any) {
     log(`ERROR: ${error.message}`);

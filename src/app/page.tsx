@@ -106,7 +106,7 @@ function CommandCenter() {
             </CardContent>
           </Card>
         </div>
-        <Card className="bg-neutral-900 border-neutral-800 flex-grow flex flex-col">
+        <Card className="bg-neutral-900 border-neutral-800 flex-grow flex flex-col min-h-0">
           <CardHeader>
               <CardTitle className="text-sm font-medium text-neutral-300 tracking-wider flex items-center gap-2"><Bot className="w-4 h-4 text-orange-500"/>LIVE MISSION FEED</CardTitle>
           </CardHeader>
