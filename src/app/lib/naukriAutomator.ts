@@ -29,7 +29,8 @@ export async function runNaukriAutomation({ cookie, section, log }: AutomationPa
         browser = await core.chromium.launch({
             args: chromium.args,
             executablePath: await chromium.executablePath(),
-            headless: chromium.headless,
+            // FIX: Set headless to true directly for production builds to satisfy TypeScript.
+            headless: true,
         });
     } else {
         log('Running in development mode, using local chromium...');
@@ -54,12 +55,10 @@ export async function runNaukriAutomation({ cookie, section, log }: AutomationPa
     log(`Navigating to Recommended Jobs page...`);
     await page.goto(SELECTORS.recommendedJobsUrl);
     
-    // Add enhanced logging to help debug authentication issues on Vercel
     log(`Current page URL: ${page.url()}`);
     log(`Current page title: "${await page.title()}"`);
 
     log('Waiting for initial job listings to load...');
-    // Increased timeout to 30 seconds for serverless cold starts
     await page.waitForSelector(SELECTORS.jobArticle, { timeout: 30000 });
 
     log(`Selecting '${section}' tab...`);
@@ -119,7 +118,6 @@ export async function runNaukriAutomation({ cookie, section, log }: AutomationPa
     log(`ERROR: ${error.message}`);
     if (page) {
       log('Taking screenshot of the error page...');
-      // Save screenshot to the /tmp directory, which is writable on Vercel
       await page.screenshot({ path: '/tmp/error-screenshot.png' });
       log('Screenshot saved to /tmp/error-screenshot.png (not accessible in logs).');
     }
