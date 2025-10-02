@@ -1,4 +1,4 @@
-import { runNaukriAutomation } from '@/app/lib/naukriAutomator';
+import { runNaukriAutomation } from '@/src/app/lib/naukriAutomator';
 
 export const dynamic = 'force-dynamic'; // Defaults to auto
 export async function POST(request: Request) {
