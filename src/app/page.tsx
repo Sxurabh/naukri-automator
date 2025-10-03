@@ -1,20 +1,35 @@
 "use client";
 
-import { useState, useEffect, useRef } from 'react';
-import { Monitor, Settings, Users, Bot, KeyRound, Briefcase, Target, Archive } from "lucide-react";
+import { useState, useEffect, useRef, Dispatch, SetStateAction } from 'react';
+import { Monitor, Settings, Bot, KeyRound, Briefcase, Target, Archive, X } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
-
-// Import the new page views
 import { AgentLogsPage } from './views/agent-logs';
 import { SettingsPage } from './views/settings';
+import useLocalStorage from './lib/hooks/useLocalStorage';
 
 const JOB_SECTIONS = ["Profile", "Top Candidate", "Preferences", "You Might Like"];
 
-// The main dashboard UI is now its own component
-function CommandCenter() {
-  const [naukriCookie, setNaukriCookie] = useState("");
+export interface MissionLog {
+  id: string;
+  status: 'Success' | 'Failed' | 'In Progress';
+  jobs: number;
+  section: string;
+  date: string;
+  fullLog: string[];
+}
+
+function CommandCenter({ 
+  setLastRun, 
+  setJobsApplied,
+  addMissionLog
+}: { 
+  setLastRun: Dispatch<SetStateAction<string>>; 
+  setJobsApplied: Dispatch<SetStateAction<number>>;
+  addMissionLog: (log: MissionLog) => void;
+}) {
+  const [naukriCookie, setNaukriCookie] = useLocalStorage("naukriCookie", "");
   const [selectedSection, setSelectedSection] = useState(JOB_SECTIONS[0]);
   const [logs, setLogs] = useState<string[]>(['[SYSTEM] Standby. Awaiting mission parameters...']);
   const [isLoading, setIsLoading] = useState(false);
@@ -31,7 +46,13 @@ function CommandCenter() {
     }
     
     setIsLoading(true);
-    setLogs([`[INIT] Mission started for sector '${selectedSection}'. Deploying agent...`]);
+    const missionId = `RUN-${new Date().toISOString().replace(/[-:.]/g, '').slice(0, -4)}`;
+    const missionStartTime = new Date();
+    const initialLogs = [`[INIT] Mission ${missionId} started for sector '${selectedSection}'. Deploying agent...`];
+    setLogs(initialLogs);
+
+    let newJobsApplied = 0;
+    let tempLogs = [...initialLogs];
 
     try {
       const response = await fetch('/api/start-automation', {
@@ -44,19 +65,65 @@ function CommandCenter() {
 
       const reader = response.body.getReader();
       const decoder = new TextDecoder();
+
       while (true) {
         const { done, value } = await reader.read();
         if (done) break;
         const chunk = decoder.decode(value, { stream: true });
-        setLogs(prev => [...prev, ...chunk.split('\n').filter(Boolean)]);
+        const newLogEntries = chunk.split('\n').filter(Boolean);
+
+        newLogEntries.forEach(log => {
+          if (log.includes('Total jobs successfully applied to in this session:')) {
+            const count = parseInt(log.split(': ')[1], 10);
+            if (!isNaN(count)) {
+              newJobsApplied = count;
+            }
+          }
+        });
+
+        setLogs(prev => [...prev, ...newLogEntries]);
+        tempLogs.push(...newLogEntries);
       }
+      
+      const missionStatus = tempLogs.some(log => log.includes('FATAL') || log.includes('ERROR')) ? 'Failed' : 'Success';
+      
+      addMissionLog({
+        id: missionId,
+        status: missionStatus,
+        jobs: newJobsApplied,
+        section: selectedSection,
+        date: missionStartTime.toUTCString(),
+        fullLog: tempLogs,
+      });
+
+      if (missionStatus === 'Success') {
+        setJobsApplied(prev => prev + newJobsApplied);
+        setLastRun(missionStartTime.toUTCString());
+      }
+
     } catch (error: any) {
-      setLogs(prev => [...prev, `[FATAL] ${error.message}`]);
+        const fatalLog = `[FATAL] ${error.message}`;
+        setLogs(prev => [...prev, fatalLog]);
+        tempLogs.push(fatalLog);
+        addMissionLog({
+            id: missionId,
+            status: 'Failed',
+            jobs: 0,
+            section: selectedSection,
+            date: missionStartTime.toUTCString(),
+            fullLog: tempLogs,
+        });
     } finally {
+      const endLog = `[END] Mission concluded. Agent returned.`;
+      setLogs(prev => [...prev, endLog]);
+      tempLogs.push(endLog);
       setIsLoading(false);
-      setLogs(prev => [...prev, `[END] Mission concluded. Agent returned.`]);
     }
   };
+
+  const clearLogs = () => {
+    setLogs(['[SYSTEM] Standby. Awaiting mission parameters...']);
+  }
 
   return (
     <div className="flex-1 overflow-hidden p-6 flex flex-col gap-6">
@@ -107,11 +174,14 @@ function CommandCenter() {
           </Card>
         </div>
         <Card className="bg-neutral-900 border-neutral-800 flex-grow flex flex-col min-h-0">
-          <CardHeader>
+          <CardHeader className="flex flex-row items-center justify-between">
               <CardTitle className="text-sm font-medium text-neutral-300 tracking-wider flex items-center gap-2"><Bot className="w-4 h-4 text-orange-500"/>LIVE MISSION FEED</CardTitle>
+              <Button variant="ghost" size="icon" className="h-7 w-7 text-neutral-400 hover:text-white" onClick={clearLogs}>
+                <X className="w-4 h-4" />
+              </Button>
           </CardHeader>
           <CardContent className="flex-grow overflow-hidden">
-              <div id="system-log" className="h-full text-xs overflow-y-auto pr-2 space-y-2 font-mono">
+              <div id="system-log" className="h-full text-xs overflow-y-auto pr-2 space-y-2 font-mono custom-scrollbar">
                   {logs.map((log, index) => {
                   const color = log.includes('ERROR') || log.includes('FATAL') ? 'text-red-400' : log.includes('WARN') ? 'text-yellow-400' : log.includes('SUCCESS') ? 'text-green-400' : log.includes('[INIT]') || log.includes('[END]') ? 'text-orange-400' : 'text-neutral-400';
                   return (
@@ -134,6 +204,17 @@ function CommandCenter() {
 export default function TacticalDashboard() {
   const [activeSection, setActiveSection] = useState("center");
   const [currentTime, setCurrentTime] = useState("...");
+  const [missionLogs, setMissionLogs] = useLocalStorage<MissionLog[]>("missionLogs", []);
+  const [lastRun, setLastRun] = useLocalStorage("lastRun", "N/A");
+  const [jobsApplied, setJobsApplied] = useLocalStorage("jobsAppliedCount", 0);
+
+  const addMissionLog = (log: MissionLog) => {
+    setMissionLogs(prev => [log, ...prev]);
+  };
+
+  const clearMissionLogs = () => {
+    setMissionLogs([]);
+  }
 
   useEffect(() => {
     const intervalId = setInterval(() => {
@@ -144,20 +225,20 @@ export default function TacticalDashboard() {
 
   const navItems = [
     { id: 'center', label: 'COMMAND CENTER', icon: Monitor },
-    { id: 'logs', label: 'AGENT LOGS', icon: Archive },
+    { id: 'logs', label: 'MISSION ARCHIVE', icon: Archive },
     { id: 'settings', label: 'SETTINGS', icon: Settings },
   ]
 
   const renderContent = () => {
     switch(activeSection) {
       case 'center':
-        return <CommandCenter />;
+        return <CommandCenter setLastRun={setLastRun} setJobsApplied={setJobsApplied} addMissionLog={addMissionLog} />;
       case 'logs':
-        return <AgentLogsPage />;
+        return <AgentLogsPage missionLogs={missionLogs} clearLogs={clearMissionLogs} />;
       case 'settings':
         return <SettingsPage />;
       default:
-        return <CommandCenter />;
+        return <CommandCenter setLastRun={setLastRun} setJobsApplied={setJobsApplied} addMissionLog={addMissionLog} />;
     }
   }
 
@@ -185,9 +266,9 @@ export default function TacticalDashboard() {
               <div className="w-2 h-2 rounded-full animate-pulse bg-green-500"></div>
               <span className="text-xs text-green-400">SYSTEM ONLINE</span>
             </div>
-            <div className="text-xs text-neutral-500">
-              <div>LAST RUN: N/A</div>
-              <div>JOBS APPLIED: 0</div>
+            <div className="text-xs text-neutral-500 space-y-1">
+              <div>LAST RUN: {lastRun}</div>
+              <div>JOBS APPLIED: {jobsApplied}</div>
             </div>
           </div>
         </div>
