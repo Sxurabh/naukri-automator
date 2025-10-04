@@ -17,6 +17,7 @@ const SELECTORS = {
   successToast: 'span.apply-message',
   sidebarForm: 'div.chatbot_Drawer',
   sidebarCloseIcon: 'div.chatBot-ic-cross',
+  errorToast: 'text="There was some error processing your request"', // Selector for the error message
 };
 
 export async function runNaukriAutomation({ cookie, section, log, appliedJobIds: appliedJobIdsFromClient }: AutomationParams): Promise<string[]> {
@@ -88,7 +89,6 @@ export async function runNaukriAutomation({ cookie, section, log, appliedJobIds:
             }
 
             const checkbox = job.locator(SELECTORS.jobCheckbox);
-            // Short timeout here is fine, we just want to check for presence on already loaded items
             if (await checkbox.isVisible({ timeout: 500 })) { 
                 candidateJobs.push({ jobElement: job, jobId });
             } else {
@@ -121,7 +121,10 @@ export async function runNaukriAutomation({ cookie, section, log, appliedJobIds:
             break; 
         }
 
-        log(`Selected ${selectedCountInBatch} jobs. Clicking the main "Apply" button...`);
+        log(`Selected ${selectedCountInBatch} jobs. Pausing briefly before applying...`);
+        await page.waitForTimeout(1000); // Added 1-second pause
+
+        log(`Clicking the main "Apply" button...`);
         const applyButton = page.locator(SELECTORS.applyButton);
         if (!await applyButton.isVisible({ timeout: 5000 })) {
             log('WARN: "Apply" button did not appear. Aborting batch.');
@@ -132,10 +135,12 @@ export async function runNaukriAutomation({ cookie, section, log, appliedJobIds:
         log('Waiting for application result...');
         const successLocator = page.locator(SELECTORS.successToast);
         const sidebarLocator = page.locator(SELECTORS.sidebarForm);
+        const errorLocator = page.locator(SELECTORS.errorToast);
 
         const result = await Promise.race([
           successLocator.waitFor({ state: 'visible', timeout: 20000 }).then(() => 'success'),
           sidebarLocator.waitFor({ state: 'visible', timeout: 20000 }).then(() => 'sidebar'),
+          errorLocator.waitFor({ state: 'visible', timeout: 20000 }).then(() => 'error'),
         ]).catch(() => {
             log("WARN: Timed out waiting for application confirmation.");
             return 'timeout'; 
@@ -150,13 +155,14 @@ export async function runNaukriAutomation({ cookie, section, log, appliedJobIds:
             } else {
                 log('SKIPPED: Sidebar detected.');
             }
-        } else {
+        } else if (result === 'error') {
+            log('ERROR: Naukri reported an error while processing the application. This may happen on the last batch. Aborting.');
+            break;
+        } else { // timeout
             log('WARN: Batch application did not confirm. Aborting to prevent errors.');
             break;
         }
 
-        // --- NAVIGATION FIX ---
-        // Force navigate back to the recommended jobs page to reset the state.
         log('Resetting page state for next batch...');
         await page.goto(SELECTORS.recommendedJobsUrl, { waitUntil: 'domcontentloaded', timeout: 20000 });
         

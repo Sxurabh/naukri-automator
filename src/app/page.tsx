@@ -1,8 +1,8 @@
 // sxurabh/naukri-automator/naukri-automator-2395bd3b0e42cdcc1775f3531cce259c26dbec88/src/app/page.tsx
 "use client";
 
-import { useState, useEffect, useRef, Dispatch, SetStateAction } from 'react';
-import { Monitor, Settings, Bot, KeyRound, Briefcase, Target, Archive, X } from "lucide-react";
+import { useState, useEffect, useRef } from 'react';
+import { Monitor, Settings, Bot, KeyRound, Briefcase, Target, Archive, X, LoaderCircle, AlertTriangle } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
@@ -10,7 +10,10 @@ import { AgentLogsPage } from './views/agent-logs';
 import { SettingsPage } from './views/settings';
 import useLocalStorage from './lib/hooks/useLocalStorage';
 
-const JOB_SECTIONS = ["Profile", "Top Candidate", "Preferences", "You might like"];
+interface JobSection {
+  name: string;
+  count: number;
+}
 
 export interface MissionLog {
   id: string;
@@ -22,16 +25,36 @@ export interface MissionLog {
 }
 
 interface CommandCenterProps {
+  naukriCookie: string;
+  setNaukriCookie: (value: string) => void;
   appliedJobIds: string[];
   onMissionComplete: (log: MissionLog, newIds: string[]) => void;
+  jobSections: JobSection[];
+  sectionsLoading: boolean;
+  sectionsError: string | null;
 }
 
-function CommandCenter({ appliedJobIds, onMissionComplete }: CommandCenterProps) {
-  const [naukriCookie, setNaukriCookie] = useLocalStorage("naukriCookie", "");
-  const [selectedSection, setSelectedSection] = useState(JOB_SECTIONS[0]);
+function CommandCenter({
+  naukriCookie,
+  setNaukriCookie,
+  appliedJobIds,
+  onMissionComplete,
+  jobSections,
+  sectionsLoading,
+  sectionsError,
+}: CommandCenterProps) {
+  const [selectedSection, setSelectedSection] = useState("");
   const [logs, setLogs] = useState<string[]>(['[SYSTEM] Standby. Awaiting mission parameters...']);
   const [isLoading, setIsLoading] = useState(false);
   const logsEndRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (jobSections.length > 0 && !jobSections.some(s => s.name === selectedSection)) {
+      setSelectedSection(jobSections[0].name);
+    } else if (jobSections.length === 0) {
+      setSelectedSection("");
+    }
+  }, [jobSections, selectedSection]);
 
   useEffect(() => {
     logsEndRef.current?.scrollIntoView({ behavior: "smooth" });
@@ -40,6 +63,10 @@ function CommandCenter({ appliedJobIds, onMissionComplete }: CommandCenterProps)
   const handleStartAutomation = async () => {
     if (!naukriCookie) {
       setLogs(prev => [...prev, "[ERROR] AGENT_AUTH_TOKEN required for deployment."]);
+      return;
+    }
+    if (!selectedSection) {
+      setLogs(prev => [...prev, "[ERROR] TARGET_SECTOR must be selected."]);
       return;
     }
     
@@ -59,7 +86,7 @@ function CommandCenter({ appliedJobIds, onMissionComplete }: CommandCenterProps)
         body: JSON.stringify({ 
           cookie: naukriCookie, 
           section: selectedSection,
-          appliedJobIds: appliedJobIds, // Send the list of already applied jobs
+          appliedJobIds: appliedJobIds,
         }),
       });
 
@@ -145,13 +172,28 @@ function CommandCenter({ appliedJobIds, onMissionComplete }: CommandCenterProps)
               <CardTitle className="text-sm font-medium text-neutral-300 tracking-wider flex items-center gap-2"><Briefcase className="w-4 h-4 text-orange-500"/>TARGET SECTOR</CardTitle>
             </CardHeader>
             <CardContent className="grid grid-cols-2 gap-2 flex-grow">
-              {JOB_SECTIONS.map(section => (
-                <Button key={section} variant="outline" onClick={() => setSelectedSection(section)}
-                  className={`justify-center text-xs h-full ${ selectedSection === section ? 'bg-orange-500/20 border-orange-500/50 text-orange-300' : 'border-neutral-700 text-neutral-400 hover:bg-neutral-800 hover:text-neutral-300 bg-transparent'}`}
-                >
-                  {section.toUpperCase()}
-                </Button>
-              ))}
+              {sectionsLoading ? (
+                Array.from({ length: 4 }).map((_, i) => <div key={i} className="h-full bg-neutral-800 animate-pulse rounded-md"></div>)
+              ) : sectionsError ? (
+                <div className="col-span-2 flex items-center justify-center text-xs text-red-400 text-center p-4 bg-red-500/10 border border-red-500/20 rounded-md">
+                  <div className="flex flex-col items-center gap-2">
+                    <AlertTriangle className="w-6 h-6"/>
+                    <p>{sectionsError}</p>
+                  </div>
+                </div>
+              ) : jobSections.length > 0 ? (
+                jobSections.map(section => (
+                  <Button key={section.name} variant="outline" onClick={() => setSelectedSection(section.name)}
+                    className={`justify-center text-xs h-full ${ selectedSection === section.name ? 'bg-orange-500/20 border-orange-500/50 text-orange-300' : 'border-neutral-700 text-neutral-400 hover:bg-neutral-800 hover:text-neutral-300 bg-transparent'}`}
+                  >
+                    {section.name.toUpperCase()} ({section.count})
+                  </Button>
+                ))
+              ) : (
+                <div className="col-span-2 flex items-center justify-center text-xs text-neutral-500">
+                  <p>Enter your auth token to load sections.</p>
+                </div>
+              )}
             </CardContent>
           </Card>
           <Card className="bg-neutral-900 border-neutral-800 flex flex-col">
@@ -160,10 +202,10 @@ function CommandCenter({ appliedJobIds, onMissionComplete }: CommandCenterProps)
             </CardHeader>
             <CardContent className="flex flex-col gap-4 flex-grow justify-between">
                 <div className="text-xs text-neutral-400 border border-neutral-800 bg-neutral-950 p-3 rounded-md space-y-1">
-                  <p>TARGET: <span className="text-orange-400">{selectedSection.toUpperCase()}</span></p>
+                  <p>TARGET: <span className="text-orange-400">{selectedSection ? selectedSection.toUpperCase() : 'N/A'}</span></p>
                   <p>STATUS: <span className="text-white">{isLoading ? 'ACTIVE' : 'STANDBY'}</span></p>
                 </div>
-                  <Button onClick={handleStartAutomation} disabled={isLoading}
+                  <Button onClick={handleStartAutomation} disabled={isLoading || !selectedSection || sectionsError !== null}
                     className="w-full h-12 bg-orange-600 text-white font-bold hover:bg-orange-700 disabled:bg-neutral-700 disabled:text-neutral-400 disabled:cursor-not-allowed transition-colors text-sm tracking-widest"
                   >
                     {isLoading ? "IN PROGRESS..." : "INITIATE MISSION"}
@@ -204,11 +246,59 @@ export default function TacticalDashboard() {
   const [missionLogs, setMissionLogs] = useLocalStorage<MissionLog[]>("missionLogs", []);
   const [lastRun, setLastRun] = useLocalStorage("lastRun", "N/A");
   const [appliedJobIds, setAppliedJobIds] = useLocalStorage<string[]>("appliedJobIds", []);
+  const [naukriCookie, setNaukriCookie] = useLocalStorage("naukriCookie", "");
+  
+  const [jobSections, setJobSections] = useState<JobSection[]>([]);
+  const [sectionsLoading, setSectionsLoading] = useState(false);
+  const [sectionsError, setSectionsError] = useState<string | null>(null);
 
   const jobsApplied = appliedJobIds.length;
 
+  useEffect(() => {
+    const fetchSections = async () => {
+      if (!naukriCookie) {
+        setJobSections([]);
+        setSectionsError(null);
+        return;
+      }
+      setSectionsLoading(true);
+      setSectionsError(null);
+      try {
+        const response = await fetch('/api/get-sections', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ cookie: naukriCookie }),
+        });
+        if (!response.ok) {
+          if (response.status === 401) {
+            const data = await response.json();
+            throw new Error(data.error || "Authentication failed. Please update your token.");
+          }
+          throw new Error("Failed to fetch sections from server.");
+        }
+        const data = await response.json();
+        if (data.length === 0) {
+            throw new Error("No job sections found. The page might have changed or the cookie is partially invalid.");
+        }
+        setJobSections(data);
+      } catch (error: any) {
+        console.error(error);
+        setSectionsError(error.message);
+        setJobSections([]);
+      } finally {
+        setSectionsLoading(false);
+      }
+    };
+
+    const debounceFetch = setTimeout(() => {
+        fetchSections();
+    }, 500);
+
+    return () => clearTimeout(debounceFetch);
+  }, [naukriCookie]);
+
   const handleMissionComplete = (log: MissionLog, newIds: string[]) => {
-    setMissionLogs(prev => [log, ...prev].slice(0, 100)); // Keep last 100 logs
+    setMissionLogs(prev => [log, ...prev].slice(0, 100));
     if (log.status === 'Success' && newIds.length > 0) {
       setLastRun(log.date);
       setAppliedJobIds(prev => [...new Set([...prev, ...newIds])]);
@@ -237,13 +327,29 @@ export default function TacticalDashboard() {
   const renderContent = () => {
     switch(activeSection) {
       case 'center':
-        return <CommandCenter appliedJobIds={appliedJobIds} onMissionComplete={handleMissionComplete} />;
+        return <CommandCenter 
+          naukriCookie={naukriCookie}
+          setNaukriCookie={setNaukriCookie}
+          appliedJobIds={appliedJobIds} 
+          onMissionComplete={handleMissionComplete}
+          jobSections={jobSections}
+          sectionsLoading={sectionsLoading}
+          sectionsError={sectionsError}
+        />;
       case 'logs':
         return <AgentLogsPage missionLogs={missionLogs} clearArchive={clearMissionArchive} />;
       case 'settings':
         return <SettingsPage />;
       default:
-        return <CommandCenter appliedJobIds={appliedJobIds} onMissionComplete={handleMissionComplete} />;
+        return <CommandCenter 
+          naukriCookie={naukriCookie}
+          setNaukriCookie={setNaukriCookie}
+          appliedJobIds={appliedJobIds} 
+          onMissionComplete={handleMissionComplete}
+          jobSections={jobSections}
+          sectionsLoading={sectionsLoading}
+          sectionsError={sectionsError}
+        />;
     }
   }
 
@@ -252,7 +358,7 @@ export default function TacticalDashboard() {
       <div className="w-72 bg-neutral-900 border-r border-neutral-800 flex-col h-full hidden lg:flex">
         <div className="p-4 border-b border-neutral-800">
           <h1 className="text-orange-500 font-bold text-lg tracking-wider">NAUKRI OPS</h1>
-          <p className="text-neutral-500 text-xs">v1.1.0 / AUTOMATOR</p>
+          <p className="text-neutral-500 text-xs">v1.2.0 / AUTOMATOR</p>
         </div>
         <nav className="flex-grow p-4 space-y-2">
             {navItems.map(item => (
@@ -280,8 +386,9 @@ export default function TacticalDashboard() {
 
       <main className="flex-1 flex flex-col">
         <div className="h-16 bg-neutral-900 border-b border-neutral-800 flex items-center justify-between px-6 flex-shrink-0">
-            <div className="text-sm text-neutral-400">
+            <div className="text-sm text-neutral-400 flex items-center gap-2">
               TACTICAL COMMAND / <span className="text-orange-500">{navItems.find(i => i.id === activeSection)?.label}</span>
+              {sectionsLoading && <LoaderCircle className="w-4 h-4 animate-spin text-neutral-500"/>}
             </div>
             <div className="text-xs text-neutral-500">
               LAST SYNC: {currentTime}
