@@ -2,13 +2,22 @@
 "use client";
 
 import { useState, useEffect, useRef } from 'react';
-import { Monitor, Settings, Bot, KeyRound, Briefcase, Target, Archive, X, LoaderCircle, AlertTriangle } from "lucide-react";
+import { Monitor, Settings, Bot, KeyRound, Briefcase, Target, Archive, X, LoaderCircle, AlertTriangle, CheckCheck } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { AgentLogsPage } from './views/agent-logs';
 import { SettingsPage } from './views/settings';
+import { AppliedJobsPage } from './views/applied-jobs';
 import useLocalStorage from './lib/hooks/useLocalStorage';
+
+export interface AppSettings {
+  jobsPerMission: number;
+  stealthMode: boolean;
+  desktopNotifications: boolean;
+}
+export type SetAppSettings = React.Dispatch<React.SetStateAction<AppSettings>>;
+
 
 interface JobSection {
   name: string;
@@ -32,6 +41,7 @@ interface CommandCenterProps {
   jobSections: JobSection[];
   sectionsLoading: boolean;
   sectionsError: string | null;
+  settings: AppSettings;
 }
 
 function CommandCenter({
@@ -42,6 +52,7 @@ function CommandCenter({
   jobSections,
   sectionsLoading,
   sectionsError,
+  settings,
 }: CommandCenterProps) {
   const [selectedSection, setSelectedSection] = useState("");
   const [logs, setLogs] = useState<string[]>(['[SYSTEM] Standby. Awaiting mission parameters...']);
@@ -87,6 +98,7 @@ function CommandCenter({
           cookie: naukriCookie, 
           section: selectedSection,
           appliedJobIds: appliedJobIds,
+          settings: settings, // Pass settings to the API
         }),
       });
 
@@ -252,6 +264,12 @@ export default function TacticalDashboard() {
   const [sectionsLoading, setSectionsLoading] = useState(false);
   const [sectionsError, setSectionsError] = useState<string | null>(null);
 
+  const [settings, setSettings] = useLocalStorage<AppSettings>("naukriAutomatorSettings", {
+    jobsPerMission: 5,
+    stealthMode: true,
+    desktopNotifications: false,
+  });
+
   const jobsApplied = appliedJobIds.length;
 
   useEffect(() => {
@@ -305,7 +323,7 @@ export default function TacticalDashboard() {
     }
   };
 
-  const clearMissionArchive = () => {
+  const clearAllHistory = () => {
     setMissionLogs([]);
     setAppliedJobIds([]);
     setLastRun("N/A");
@@ -320,6 +338,7 @@ export default function TacticalDashboard() {
 
   const navItems = [
     { id: 'center', label: 'COMMAND CENTER', icon: Monitor },
+    { id: 'applied', label: 'APPLIED JOBS', icon: CheckCheck },
     { id: 'logs', label: 'MISSION ARCHIVE', icon: Archive },
     { id: 'settings', label: 'SETTINGS', icon: Settings },
   ]
@@ -335,11 +354,14 @@ export default function TacticalDashboard() {
           jobSections={jobSections}
           sectionsLoading={sectionsLoading}
           sectionsError={sectionsError}
+          settings={settings}
         />;
+      case 'applied':
+        return <AppliedJobsPage appliedJobIds={appliedJobIds} clearAppliedJobs={clearAllHistory} />;
       case 'logs':
-        return <AgentLogsPage missionLogs={missionLogs} clearArchive={clearMissionArchive} />;
+        return <AgentLogsPage missionLogs={missionLogs} clearArchive={clearAllHistory} />;
       case 'settings':
-        return <SettingsPage />;
+        return <SettingsPage settings={settings} setSettings={setSettings} />;
       default:
         return <CommandCenter 
           naukriCookie={naukriCookie}
@@ -349,6 +371,7 @@ export default function TacticalDashboard() {
           jobSections={jobSections}
           sectionsLoading={sectionsLoading}
           sectionsError={sectionsError}
+          settings={settings}
         />;
     }
   }
@@ -358,7 +381,7 @@ export default function TacticalDashboard() {
       <div className="w-72 bg-neutral-900 border-r border-neutral-800 flex-col h-full hidden lg:flex">
         <div className="p-4 border-b border-neutral-800">
           <h1 className="text-orange-500 font-bold text-lg tracking-wider">NAUKRI OPS</h1>
-          <p className="text-neutral-500 text-xs">v1.2.0 / AUTOMATOR</p>
+          <p className="text-neutral-500 text-xs">v1.4.0 / AUTOMATOR</p>
         </div>
         <nav className="flex-grow p-4 space-y-2">
             {navItems.map(item => (

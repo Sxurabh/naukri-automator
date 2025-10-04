@@ -1,12 +1,14 @@
 // sxurabh/naukri-automator/naukri-automator-2395bd3b0e42cdcc1775f3531cce259c26dbec88/src/app/lib/naukriAutomator.ts
 import core from 'playwright-core';
 import chromium from '@sparticuz/chromium';
+import { AppSettings } from '../page';
 
 interface AutomationParams {
   cookie: string;
   section: string;
   log: (message: string) => void;
   appliedJobIds: string[];
+  settings: AppSettings;
 }
 
 const SELECTORS = {
@@ -17,26 +19,33 @@ const SELECTORS = {
   successToast: 'span.apply-message',
   sidebarForm: 'div.chatbot_Drawer',
   sidebarCloseIcon: 'div.chatBot-ic-cross',
-  errorToast: 'text="There was some error processing your request"', // Selector for the error message
+  errorToast: 'text="There was some error processing your request"',
 };
 
-export async function runNaukriAutomation({ cookie, section, log, appliedJobIds: appliedJobIdsFromClient }: AutomationParams): Promise<string[]> {
+// Helper for stealth mode delays
+const randomDelay = (settings: AppSettings) => {
+  if (!settings.stealthMode) return Promise.resolve();
+  const delay = Math.random() * 2000 + 500; // Random delay between 0.5s and 2.5s
+  return new Promise(resolve => setTimeout(resolve, delay));
+}
+
+export async function runNaukriAutomation({ cookie, section, log, appliedJobIds: appliedJobIdsFromClient, settings }: AutomationParams): Promise<string[]> {
   let browser: core.Browser | null = null;
   let page: core.Page | null = null;
   try {
     log('Preparing browser...');
+    log(`STEALTH MODE: ${settings.stealthMode ? 'ENABLED' : 'DISABLED'}`);
+    log(`JOBS PER MISSION: ${settings.jobsPerMission}`);
     
     const isProduction = process.env.NODE_ENV === 'production';
 
     if (isProduction) {
-        log('Running in production mode, using serverless chromium...');
         browser = await core.chromium.launch({
             args: chromium.args,
             executablePath: await chromium.executablePath(),
             headless: true,
         });
     } else {
-        log('Running in development mode, using local chromium...');
         const playwright = await import('playwright');
         browser = await playwright.chromium.launch({
             headless: false,
@@ -55,17 +64,22 @@ export async function runNaukriAutomation({ cookie, section, log, appliedJobIds:
       { name: 'nauk_at', value: cookie, domain: '.naukri.com', path: '/' },
     ]);
 
-    log(`Navigating to Recommended Jobs page...`);
-    await page.goto(SELECTORS.recommendedJobsUrl);
+    await page.goto(SELECTORS.recommendedJobsUrl, { waitUntil: 'domcontentloaded', timeout: 40000 });
     
-    log(`Current page URL: ${page.url()}`);
-    log(`Current page title: "${await page.title()}"`);
+    const pageUrl = page.url();
+    if (pageUrl.includes('/nlogin/login')) {
+      throw new Error('Authentication failed. The provided cookie is likely invalid or expired.');
+    }
 
-    log('Waiting for initial job listings to load...');
-    await page.waitForSelector(SELECTORS.jobArticle, { timeout: 30000 });
+    try {
+      await page.waitForSelector('div.tab-list-item', { timeout: 20000 });
+    } catch(e) {
+      throw new Error('Failed to load job sections. Please check your cookie and network connection.');
+    }
 
     log(`Selecting '${section}' tab...`);
     await page.locator(`text=${section}`).first().click();
+    await randomDelay(settings);
 
     log('Waiting for jobs to load after tab switch...');
     await page.waitForTimeout(3000); 
@@ -73,7 +87,7 @@ export async function runNaukriAutomation({ cookie, section, log, appliedJobIds:
     const previouslyAppliedIds = new Set<string>(appliedJobIdsFromClient);
     const sessionAppliedIds = new Set<string>();
     let totalAppliedCount = 0;
-    const BATCH_SIZE = 5;
+    const BATCH_SIZE = settings.jobsPerMission;
 
     while (true) {
         log('Scanning for new jobs to apply to...');
@@ -113,7 +127,7 @@ export async function runNaukriAutomation({ cookie, section, log, appliedJobIds:
             await checkbox.click();
             jobIdsInThisBatch.push(jobId);
             selectedCountInBatch++;
-            await page.waitForTimeout(250);
+            await randomDelay(settings);
         }
 
         if (selectedCountInBatch === 0) {
@@ -122,7 +136,7 @@ export async function runNaukriAutomation({ cookie, section, log, appliedJobIds:
         }
 
         log(`Selected ${selectedCountInBatch} jobs. Pausing briefly before applying...`);
-        await page.waitForTimeout(1000); // Added 1-second pause
+        await page.waitForTimeout(1000);
 
         log(`Clicking the main "Apply" button...`);
         const applyButton = page.locator(SELECTORS.applyButton);
@@ -154,6 +168,7 @@ export async function runNaukriAutomation({ cookie, section, log, appliedJobIds:
                 log(`SUCCESS: ${successText}`);
             } else {
                 log('SKIPPED: Sidebar detected.');
+                log(`INFO: The following job IDs were in the batch that triggered the sidebar. One may require manual application: ${jobIdsInThisBatch.join(', ')}`);
             }
         } else if (result === 'error') {
             log('ERROR: Naukri reported an error while processing the application. This may happen on the last batch. Aborting.');
@@ -164,6 +179,7 @@ export async function runNaukriAutomation({ cookie, section, log, appliedJobIds:
         }
 
         log('Resetting page state for next batch...');
+        await randomDelay(settings);
         await page.goto(SELECTORS.recommendedJobsUrl, { waitUntil: 'domcontentloaded', timeout: 20000 });
         
         log(`Re-selecting '${section}' tab...`);
