@@ -1,3 +1,4 @@
+// sxurabh/naukri-automator/naukri-automator-2395bd3b0e42cdcc1775f3531cce259c26dbec88/src/app/page.tsx
 "use client";
 
 import { useState, useEffect, useRef, Dispatch, SetStateAction } from 'react';
@@ -9,7 +10,7 @@ import { AgentLogsPage } from './views/agent-logs';
 import { SettingsPage } from './views/settings';
 import useLocalStorage from './lib/hooks/useLocalStorage';
 
-const JOB_SECTIONS = ["Profile", "Top Candidate", "Preferences", "You Might Like"];
+const JOB_SECTIONS = ["Profile", "Top Candidate", "Preferences", "You might like"];
 
 export interface MissionLog {
   id: string;
@@ -20,15 +21,12 @@ export interface MissionLog {
   fullLog: string[];
 }
 
-function CommandCenter({ 
-  setLastRun, 
-  setJobsApplied,
-  addMissionLog
-}: { 
-  setLastRun: Dispatch<SetStateAction<string>>; 
-  setJobsApplied: Dispatch<SetStateAction<number>>;
-  addMissionLog: (log: MissionLog) => void;
-}) {
+interface CommandCenterProps {
+  appliedJobIds: string[];
+  onMissionComplete: (log: MissionLog, newIds: string[]) => void;
+}
+
+function CommandCenter({ appliedJobIds, onMissionComplete }: CommandCenterProps) {
   const [naukriCookie, setNaukriCookie] = useLocalStorage("naukriCookie", "");
   const [selectedSection, setSelectedSection] = useState(JOB_SECTIONS[0]);
   const [logs, setLogs] = useState<string[]>(['[SYSTEM] Standby. Awaiting mission parameters...']);
@@ -51,14 +49,18 @@ function CommandCenter({
     const initialLogs = [`[INIT] Mission ${missionId} started for sector '${selectedSection}'. Deploying agent...`];
     setLogs(initialLogs);
 
-    let newJobsApplied = 0;
     let tempLogs = [...initialLogs];
+    let newMissionAppliedIds: string[] = [];
 
     try {
       const response = await fetch('/api/start-automation', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ cookie: naukriCookie, section: selectedSection }),
+        body: JSON.stringify({ 
+          cookie: naukriCookie, 
+          section: selectedSection,
+          appliedJobIds: appliedJobIds, // Send the list of already applied jobs
+        }),
       });
 
       if (!response.body) throw new Error("Response stream not available.");
@@ -71,53 +73,49 @@ function CommandCenter({
         if (done) break;
         const chunk = decoder.decode(value, { stream: true });
         const newLogEntries = chunk.split('\n').filter(Boolean);
-
-        newLogEntries.forEach(log => {
-          if (log.includes('Total jobs successfully applied to in this session:')) {
-            const count = parseInt(log.split(': ')[1], 10);
-            if (!isNaN(count)) {
-              newJobsApplied = count;
+        
+        const displayLogs: string[] = [];
+        newLogEntries.forEach(line => {
+          if (line.startsWith('APPLIED_JOB_IDS:')) {
+            try {
+              const ids = JSON.parse(line.substring(line.indexOf(':') + 1));
+              if (Array.isArray(ids)) {
+                newMissionAppliedIds = ids;
+              }
+            } catch (e) {
+              console.error("Failed to parse applied job IDs", e);
             }
+          } else {
+            displayLogs.push(line);
           }
         });
 
-        setLogs(prev => [...prev, ...newLogEntries]);
-        tempLogs.push(...newLogEntries);
+        if (displayLogs.length > 0) {
+          setLogs(prev => [...prev, ...displayLogs]);
+          tempLogs.push(...displayLogs);
+        }
       }
       
-      const missionStatus = tempLogs.some(log => log.includes('FATAL') || log.includes('ERROR')) ? 'Failed' : 'Success';
-      
-      addMissionLog({
-        id: missionId,
-        status: missionStatus,
-        jobs: newJobsApplied,
-        section: selectedSection,
-        date: missionStartTime.toUTCString(),
-        fullLog: tempLogs,
-      });
-
-      if (missionStatus === 'Success') {
-        setJobsApplied(prev => prev + newJobsApplied);
-        setLastRun(missionStartTime.toUTCString());
-      }
-
     } catch (error: any) {
         const fatalLog = `[FATAL] ${error.message}`;
         setLogs(prev => [...prev, fatalLog]);
         tempLogs.push(fatalLog);
-        addMissionLog({
-            id: missionId,
-            status: 'Failed',
-            jobs: 0,
-            section: selectedSection,
-            date: missionStartTime.toUTCString(),
-            fullLog: tempLogs,
-        });
     } finally {
       const endLog = `[END] Mission concluded. Agent returned.`;
       setLogs(prev => [...prev, endLog]);
       tempLogs.push(endLog);
       setIsLoading(false);
+
+      const missionStatus = tempLogs.some(log => log.includes('FATAL') || log.includes('ERROR')) ? 'Failed' : 'Success';
+      
+      onMissionComplete({
+        id: missionId,
+        status: missionStatus,
+        jobs: newMissionAppliedIds.length,
+        section: selectedSection,
+        date: missionStartTime.toUTCString(),
+        fullLog: tempLogs,
+      }, newMissionAppliedIds);
     }
   };
 
@@ -200,21 +198,28 @@ function CommandCenter({
   )
 }
 
-
 export default function TacticalDashboard() {
   const [activeSection, setActiveSection] = useState("center");
   const [currentTime, setCurrentTime] = useState("...");
   const [missionLogs, setMissionLogs] = useLocalStorage<MissionLog[]>("missionLogs", []);
   const [lastRun, setLastRun] = useLocalStorage("lastRun", "N/A");
-  const [jobsApplied, setJobsApplied] = useLocalStorage("jobsAppliedCount", 0);
+  const [appliedJobIds, setAppliedJobIds] = useLocalStorage<string[]>("appliedJobIds", []);
 
-  const addMissionLog = (log: MissionLog) => {
-    setMissionLogs(prev => [log, ...prev]);
+  const jobsApplied = appliedJobIds.length;
+
+  const handleMissionComplete = (log: MissionLog, newIds: string[]) => {
+    setMissionLogs(prev => [log, ...prev].slice(0, 100)); // Keep last 100 logs
+    if (log.status === 'Success' && newIds.length > 0) {
+      setLastRun(log.date);
+      setAppliedJobIds(prev => [...new Set([...prev, ...newIds])]);
+    }
   };
 
-  const clearMissionLogs = () => {
+  const clearMissionArchive = () => {
     setMissionLogs([]);
-  }
+    setAppliedJobIds([]);
+    setLastRun("N/A");
+  };
 
   useEffect(() => {
     const intervalId = setInterval(() => {
@@ -232,23 +237,22 @@ export default function TacticalDashboard() {
   const renderContent = () => {
     switch(activeSection) {
       case 'center':
-        return <CommandCenter setLastRun={setLastRun} setJobsApplied={setJobsApplied} addMissionLog={addMissionLog} />;
+        return <CommandCenter appliedJobIds={appliedJobIds} onMissionComplete={handleMissionComplete} />;
       case 'logs':
-        return <AgentLogsPage missionLogs={missionLogs} clearLogs={clearMissionLogs} />;
+        return <AgentLogsPage missionLogs={missionLogs} clearArchive={clearMissionArchive} />;
       case 'settings':
         return <SettingsPage />;
       default:
-        return <CommandCenter setLastRun={setLastRun} setJobsApplied={setJobsApplied} addMissionLog={addMissionLog} />;
+        return <CommandCenter appliedJobIds={appliedJobIds} onMissionComplete={handleMissionComplete} />;
     }
   }
 
   return (
     <div className="flex h-screen bg-neutral-950 text-neutral-100">
-      {/* Sidebar */}
       <div className="w-72 bg-neutral-900 border-r border-neutral-800 flex-col h-full hidden lg:flex">
         <div className="p-4 border-b border-neutral-800">
           <h1 className="text-orange-500 font-bold text-lg tracking-wider">NAUKRI OPS</h1>
-          <p className="text-neutral-500 text-xs">v1.0.0 / AUTOMATOR</p>
+          <p className="text-neutral-500 text-xs">v1.1.0 / AUTOMATOR</p>
         </div>
         <nav className="flex-grow p-4 space-y-2">
             {navItems.map(item => (
@@ -268,13 +272,12 @@ export default function TacticalDashboard() {
             </div>
             <div className="text-xs text-neutral-500 space-y-1">
               <div>LAST RUN: {lastRun}</div>
-              <div>JOBS APPLIED: {jobsApplied}</div>
+              <div>JOBS APPLIED (TOTAL): {jobsApplied}</div>
             </div>
           </div>
         </div>
       </div>
 
-      {/* Main Content */}
       <main className="flex-1 flex flex-col">
         <div className="h-16 bg-neutral-900 border-b border-neutral-800 flex items-center justify-between px-6 flex-shrink-0">
             <div className="text-sm text-neutral-400">

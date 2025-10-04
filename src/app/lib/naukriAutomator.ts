@@ -1,3 +1,4 @@
+// sxurabh/naukri-automator/naukri-automator-2395bd3b0e42cdcc1775f3531cce259c26dbec88/src/app/lib/naukriAutomator.ts
 import core from 'playwright-core';
 import chromium from '@sparticuz/chromium';
 
@@ -5,6 +6,7 @@ interface AutomationParams {
   cookie: string;
   section: string;
   log: (message: string) => void;
+  appliedJobIds: string[];
 }
 
 const SELECTORS = {
@@ -17,7 +19,7 @@ const SELECTORS = {
   sidebarCloseIcon: 'div.chatBot-ic-cross',
 };
 
-export async function runNaukriAutomation({ cookie, section, log }: AutomationParams) {
+export async function runNaukriAutomation({ cookie, section, log, appliedJobIds: appliedJobIdsFromClient }: AutomationParams): Promise<string[]> {
   let browser: core.Browser | null = null;
   let page: core.Page | null = null;
   try {
@@ -64,50 +66,70 @@ export async function runNaukriAutomation({ cookie, section, log }: AutomationPa
     log(`Selecting '${section}' tab...`);
     await page.locator(`text=${section}`).first().click();
 
-    log('Waiting for jobs to reload after tab switch...');
+    log('Waiting for jobs to load after tab switch...');
     await page.waitForTimeout(3000); 
 
-    log('Starting batch application process...');
+    const previouslyAppliedIds = new Set<string>(appliedJobIdsFromClient);
+    const sessionAppliedIds = new Set<string>();
     let totalAppliedCount = 0;
     const BATCH_SIZE = 5;
 
     while (true) {
-        log('Searching for available jobs for the next batch...');
-        const availableJobs = await page.locator(SELECTORS.jobArticle).all();
+        log('Scanning for new jobs to apply to...');
+        const allJobArticles = await page.locator(SELECTORS.jobArticle).all();
+        
+        const candidateJobs: { jobElement: core.Locator; jobId: string }[] = [];
+        for (const job of allJobArticles) {
+            const jobId = await job.getAttribute('data-job-id');
+            if (!jobId) continue;
 
-        if (availableJobs.length === 0) {
-            log('No more jobs found to apply to.');
-            break;
-        }
+            if (previouslyAppliedIds.has(jobId) || sessionAppliedIds.has(jobId)) {
+                continue; 
+            }
 
-        const jobsInBatch = availableJobs.slice(0, BATCH_SIZE);
-        log(`Found ${availableJobs.length} jobs. Processing a batch of ${jobsInBatch.length}...`);
-
-        let selectedCountInBatch = 0;
-        for (const job of jobsInBatch) {
             const checkbox = job.locator(SELECTORS.jobCheckbox);
-            if (await checkbox.isVisible()) {
-                await checkbox.click();
-                selectedCountInBatch++;
-                await page.waitForTimeout(250);
+            // Short timeout here is fine, we just want to check for presence on already loaded items
+            if (await checkbox.isVisible({ timeout: 500 })) { 
+                candidateJobs.push({ jobElement: job, jobId });
+            } else {
+                log(`INFO: Job ${jobId} has no checkbox, marking as processed.`);
+                previouslyAppliedIds.add(jobId);
             }
         }
 
-        if (selectedCountInBatch === 0) {
-            log("No selectable jobs found in this batch. Ending automation.");
-            break; 
+        if (candidateJobs.length === 0) {
+            log('No new apply-able jobs found on the page. Ending mission.');
+            break;
         }
         
+        log(`Found ${candidateJobs.length} new jobs. Preparing a batch of up to ${BATCH_SIZE}...`);
+
+        const batchToProcess = candidateJobs.slice(0, BATCH_SIZE);
+        const jobIdsInThisBatch: string[] = [];
+        
+        let selectedCountInBatch = 0;
+        for (const { jobElement, jobId } of batchToProcess) {
+            const checkbox = jobElement.locator(SELECTORS.jobCheckbox);
+            await checkbox.click();
+            jobIdsInThisBatch.push(jobId);
+            selectedCountInBatch++;
+            await page.waitForTimeout(250);
+        }
+
+        if (selectedCountInBatch === 0) {
+            log("No selectable jobs found. This should not happen, ending automation.");
+            break; 
+        }
+
         log(`Selected ${selectedCountInBatch} jobs. Clicking the main "Apply" button...`);
         const applyButton = page.locator(SELECTORS.applyButton);
         if (!await applyButton.isVisible({ timeout: 5000 })) {
-            log('WARN: "Apply" button did not appear. Assuming all jobs are processed.');
+            log('WARN: "Apply" button did not appear. Aborting batch.');
             break;
         }
         await applyButton.click();
         
         log('Waiting for application result...');
-        
         const successLocator = page.locator(SELECTORS.successToast);
         const sidebarLocator = page.locator(SELECTORS.sidebarForm);
 
@@ -115,42 +137,37 @@ export async function runNaukriAutomation({ cookie, section, log }: AutomationPa
           successLocator.waitFor({ state: 'visible', timeout: 20000 }).then(() => 'success'),
           sidebarLocator.waitFor({ state: 'visible', timeout: 20000 }).then(() => 'sidebar'),
         ]).catch(() => {
-            log("WARN: Timed out waiting for confirmation.");
+            log("WARN: Timed out waiting for application confirmation.");
             return 'timeout'; 
         });
 
-        if (result === 'success') {
-          const successText = await successLocator.innerText();
-          log(`SUCCESS: ${successText}`);
-          totalAppliedCount += selectedCountInBatch;
-        } else if (result === 'sidebar') {
-          log('SKIPPED: Sidebar detected. Eligible jobs in batch were applied. Closing to continue...');
-          totalAppliedCount += selectedCountInBatch;
-          const closeIcon = page.locator(SELECTORS.sidebarCloseIcon);
-          if (await closeIcon.isVisible({ timeout: 3000 })) {
-              await closeIcon.click();
-              log('Sidebar close icon clicked.');
-          } else {
-              log('WARN: Could not find sidebar close icon. Pressing Escape as fallback.');
-              await page.keyboard.press('Escape');
-          }
+        if (result === 'success' || result === 'sidebar') {
+            jobIdsInThisBatch.forEach(id => sessionAppliedIds.add(id));
+            totalAppliedCount += jobIdsInThisBatch.length;
+            if (result === 'success') {
+                const successText = await successLocator.innerText();
+                log(`SUCCESS: ${successText}`);
+            } else {
+                log('SKIPPED: Sidebar detected.');
+            }
+        } else {
+            log('WARN: Batch application did not confirm. Aborting to prevent errors.');
+            break;
         }
 
-        // --- NEW REFRESH LOGIC ---
-        log('Refreshing job list by re-selecting the tab...');
-        // Click another tab (if available) and then click back to force a refresh
-        const otherTab = await page.locator('div.tab').filter({ hasNotText: section }).first();
-        if (await otherTab.isVisible()) {
-            await otherTab.click();
-            await page.waitForTimeout(1000); // Brief wait
-        }
-        await page.locator(`text=${section}`).first().click();
+        // --- NAVIGATION FIX ---
+        // Force navigate back to the recommended jobs page to reset the state.
+        log('Resetting page state for next batch...');
+        await page.goto(SELECTORS.recommendedJobsUrl, { waitUntil: 'domcontentloaded', timeout: 20000 });
         
+        log(`Re-selecting '${section}' tab...`);
+        await page.locator(`text=${section}`).first().click();
+
+        log('Waiting for jobs to render...');
         try {
             await page.waitForSelector(SELECTORS.jobArticle, { timeout: 15000 });
-            log('Job list refreshed. Continuing to the next batch.');
         } catch {
-            log('No job articles found after refresh. Assuming mission is complete.');
+            log('Could not find job articles after reload. Ending mission.');
             break;
         }
     }
@@ -158,13 +175,19 @@ export async function runNaukriAutomation({ cookie, section, log }: AutomationPa
     log(`--- MISSION SUMMARY ---`);
     log(`Batch application complete.`);
     log(`Total jobs successfully applied to in this session: ${totalAppliedCount}`);
+    
+    return Array.from(sessionAppliedIds);
 
   } catch (error: any) {
     log(`ERROR: ${error.message}`);
     if (page) {
-      log('Taking screenshot of the error page...');
-      await page.screenshot({ path: '/tmp/error-screenshot.png' });
-      log('Screenshot saved to /tmp/error-screenshot.png (not accessible in logs).');
+      try {
+        log('Taking screenshot of the error page...');
+        await page.screenshot({ path: '/tmp/error-screenshot.png' });
+        log('Screenshot saved to /tmp/error-screenshot.png (not accessible in logs).');
+      } catch (screenshotError: any) {
+        log(`Could not take screenshot: ${screenshotError.message}`);
+      }
     }
     throw error;
   } finally {
