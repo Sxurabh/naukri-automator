@@ -1,7 +1,11 @@
-// sxurabh/naukri-automator/naukri-automator-2395bd3b0e42cdcc1775f3531cce259c26dbec88/src/app/lib/naukriAutomator.ts
 import core from 'playwright-core';
 import chromium from '@sparticuz/chromium';
-import { AppSettings } from '../page';
+
+// Define AppSettings here to avoid importing from React components (page.tsx)
+export interface AppSettings {
+  jobsPerMission: number;
+  stealthMode: boolean;
+}
 
 interface AutomationParams {
   cookie: string;
@@ -38,17 +42,25 @@ export async function runNaukriAutomation({ cookie, section, log, appliedJobIds:
     log(`JOBS PER MISSION: ${settings.jobsPerMission}`);
     
     const isProduction = process.env.NODE_ENV === 'production';
+    // Check for explicit headless env var (string 'true') or default to false for local dev
+    const explicitHeadless = process.env.HEADLESS_MODE === 'true';
 
     if (isProduction) {
+        // Vercel Environment (Serverless)
+        log('Launching in Production Mode (Playwright Core + Chromium)...');
         browser = await core.chromium.launch({
             args: chromium.args,
             executablePath: await chromium.executablePath(),
-            headless: true,
+            headless: true, // Always headless in production
         });
     } else {
+        // Local or GitHub Actions Environment
+        log(`Launching in Dev/CLI Mode (Standard Playwright). Headless: ${explicitHeadless}`);
+        // Dynamic import prevents Vercel build errors
         const playwright = await import('playwright');
         browser = await playwright.chromium.launch({
-            headless: false,
+            headless: explicitHeadless,
+            args: ['--no-sandbox', '--disable-setuid-sandbox'] // Required for some CI environments
         });
     }
 
@@ -56,7 +68,10 @@ export async function runNaukriAutomation({ cookie, section, log, appliedJobIds:
       throw new Error("Browser instance could not be launched.");
     }
 
-    const context = await browser.newContext();
+    const context = await browser.newContext({
+      userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+    });
+    
     page = await context.newPage();
 
     log('Setting session cookie...');
@@ -64,6 +79,7 @@ export async function runNaukriAutomation({ cookie, section, log, appliedJobIds:
       { name: 'nauk_at', value: cookie, domain: '.naukri.com', path: '/' },
     ]);
 
+    log(`Navigating to Naukri Recommended Jobs...`);
     await page.goto(SELECTORS.recommendedJobsUrl, { waitUntil: 'domcontentloaded', timeout: 40000 });
     
     const pageUrl = page.url();
@@ -78,7 +94,15 @@ export async function runNaukriAutomation({ cookie, section, log, appliedJobIds:
     }
 
     log(`Selecting '${section}' tab...`);
-    await page.locator(`text=${section}`).first().click();
+    // Improved selector to handle exact text matching more robustly
+    const tabLocator = page.locator(`div.tab-list-item:has-text("${section}")`).first();
+    if (await tabLocator.isVisible()) {
+        await tabLocator.click();
+    } else {
+        log(`WARN: Tab '${section}' not found exactly. Trying partial match...`);
+        await page.locator(`text=${section}`).first().click();
+    }
+    
     await randomDelay(settings);
 
     log('Waiting for jobs to load after tab switch...');
@@ -106,7 +130,7 @@ export async function runNaukriAutomation({ cookie, section, log, appliedJobIds:
             if (await checkbox.isVisible({ timeout: 500 })) { 
                 candidateJobs.push({ jobElement: job, jobId });
             } else {
-                log(`INFO: Job ${jobId} has no checkbox, marking as processed.`);
+                // If checkbox isn't visible, we assume it's already applied or not applicable
                 previouslyAppliedIds.add(jobId);
             }
         }
@@ -131,7 +155,7 @@ export async function runNaukriAutomation({ cookie, section, log, appliedJobIds:
         }
 
         if (selectedCountInBatch === 0) {
-            log("No selectable jobs found. This should not happen, ending automation.");
+            log("No selectable jobs found in this batch. Ending automation.");
             break; 
         }
 
@@ -163,27 +187,43 @@ export async function runNaukriAutomation({ cookie, section, log, appliedJobIds:
         if (result === 'success' || result === 'sidebar') {
             jobIdsInThisBatch.forEach(id => sessionAppliedIds.add(id));
             totalAppliedCount += jobIdsInThisBatch.length;
+            
             if (result === 'success') {
                 const successText = await successLocator.innerText();
                 log(`SUCCESS: ${successText}`);
             } else {
-                log('SKIPPED: Sidebar detected.');
-                log(`INFO: The following job IDs were in the batch that triggered the sidebar. One may require manual application: ${jobIdsInThisBatch.join(', ')}`);
+                log('SKIPPED: Sidebar detected (Chatbot/Questionnaire).');
+                log(`INFO: Jobs in this batch marked as processed: ${jobIdsInThisBatch.join(', ')}`);
+                // Optional: Attempt to close sidebar if it blocks the UI
+                const closeIcon = page.locator(SELECTORS.sidebarCloseIcon);
+                if (await closeIcon.isVisible()) {
+                    await closeIcon.click();
+                }
             }
         } else if (result === 'error') {
-            log('ERROR: Naukri reported an error while processing the application. This may happen on the last batch. Aborting.');
+            log('ERROR: Naukri reported an error while processing the application. Aborting mission.');
             break;
         } else { // timeout
             log('WARN: Batch application did not confirm. Aborting to prevent errors.');
             break;
         }
 
+        if (totalAppliedCount >= settings.jobsPerMission) {
+            log(`Target of ${settings.jobsPerMission} jobs reached. Mission accomplished.`);
+            break;
+        }
+
         log('Resetting page state for next batch...');
         await randomDelay(settings);
-        await page.goto(SELECTORS.recommendedJobsUrl, { waitUntil: 'domcontentloaded', timeout: 20000 });
+        await page.reload({ waitUntil: 'domcontentloaded' });
         
         log(`Re-selecting '${section}' tab...`);
-        await page.locator(`text=${section}`).first().click();
+        const tabLocatorRetry = page.locator(`div.tab-list-item:has-text("${section}")`).first();
+        if (await tabLocatorRetry.isVisible()) {
+            await tabLocatorRetry.click();
+        } else {
+            await page.locator(`text=${section}`).first().click();
+        }
 
         log('Waiting for jobs to render...');
         try {
@@ -204,9 +244,11 @@ export async function runNaukriAutomation({ cookie, section, log, appliedJobIds:
     log(`ERROR: ${error.message}`);
     if (page) {
       try {
-        log('Taking screenshot of the error page...');
-        await page.screenshot({ path: '/tmp/error-screenshot.png' });
-        log('Screenshot saved to /tmp/error-screenshot.png (not accessible in logs).');
+        // Screenshot logic for debugging (saved to ephemeral storage)
+        const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
+        const screenshotPath = `/tmp/error-${timestamp}.png`;
+        await page.screenshot({ path: screenshotPath });
+        log(`Screenshot saved to ${screenshotPath} (check artifacts if available).`);
       } catch (screenshotError: any) {
         log(`Could not take screenshot: ${screenshotError.message}`);
       }

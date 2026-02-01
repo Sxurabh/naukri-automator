@@ -1,0 +1,33 @@
+name: Naukri Cloud Auto-Apply
+
+on:
+  workflow_dispatch: # Allows you to click "Run" manually
+  schedule:
+    - cron: '30 4 * * *' # 04:30 UTC = 10:00 AM IST
+
+jobs:
+  run-automation:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Install Dependencies
+        # Installs packages and the browser binary
+        run: |
+          npm ci
+          npm install -D playwright
+
+      - name: Install Browsers
+        run: npx playwright install chromium --with-deps
+
+      - name: Run Automation Script
+        env:
+          NAUKRI_COOKIE: ${{ secrets.NAUKRI_COOKIE }}
+          HEADLESS_MODE: "true" # Forces the script to run without a window
+        run: npx tsx scripts/run-cloud.ts
