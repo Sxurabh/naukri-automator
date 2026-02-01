@@ -16,6 +16,7 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: '20'
+<<<<<<< HEAD
 
       - name: Install pnpm
         uses: pnpm/action-setup@v4
@@ -26,6 +27,15 @@ jobs:
         run: |
           pnpm install --frozen-lockfile
           npx playwright install --with-deps
+=======
+          
+
+      - name: Install Dependencies
+        # Installs packages and the browser binary
+        run: |
+          npm ci
+          npm install -D playwright
+>>>>>>> 15b593e9d88fd5f49005731b2f9d03c0a89dc2cd
 
       - name: Install Browsers
         run: npx playwright install chromium --with-deps
