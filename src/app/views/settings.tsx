@@ -17,8 +17,8 @@ export function SettingsPage({ settings, setSettings }: SettingsPageProps) {
     let value = parseInt(e.target.value, 10);
     if (isNaN(value)) value = 1;
     if (value < 1) value = 1;
-    if (value > 10) value = 10;
-    setSettings(prev => ({...prev, jobsPerMission: value}));
+    if (value > 50) value = 50;
+    setSettings(prev => ({ ...prev, jobsPerMission: value }));
   };
 
   return (
@@ -33,24 +33,24 @@ export function SettingsPage({ settings, setSettings }: SettingsPageProps) {
         <CardContent className="space-y-6">
           <div className="space-y-2">
             <Label htmlFor="jobs-per-run" className="text-neutral-400">Jobs Per Mission</Label>
-            <Input 
-              id="jobs-per-run" 
-              type="number" 
+            <Input
+              id="jobs-per-run"
+              type="number"
               min="1"
-              max="10"
+              max="50"
               value={settings.jobsPerMission}
               onChange={handleJobsPerMissionChange}
-              className="bg-neutral-950 border-neutral-700" 
+              className="bg-neutral-950 border-neutral-700"
             />
-            <p className="text-xs text-neutral-500">Number of jobs to apply for in a single batch (1-10).</p>
+            <p className="text-xs text-neutral-500">Total number of jobs to apply for in this session (Max 50. Applied 5 at a time).</p>
           </div>
           <div className="flex items-center justify-between space-x-2 p-4 border border-neutral-800 rounded-md">
             <div className="flex flex-col space-y-1">
               <Label htmlFor="stealth-mode" className="text-neutral-400">Stealth Mode</Label>
               <p className="text-xs text-neutral-500">Adds randomized delays to mimic human behavior.</p>
             </div>
-            <Switch 
-              id="stealth-mode" 
+            <Switch
+              id="stealth-mode"
               checked={settings.stealthMode}
               onCheckedChange={(checked) => setSettings(prev => ({ ...prev, stealthMode: checked }))}
             />
@@ -68,15 +68,15 @@ export function SettingsPage({ settings, setSettings }: SettingsPageProps) {
         <CardContent className="space-y-4">
           <div className="flex items-center justify-between space-x-2 p-4 border border-neutral-800 rounded-md">
             <Label htmlFor="desktop-notifications" className="text-neutral-400">Enable Desktop Notifications</Label>
-            <Switch 
-              id="desktop-notifications" 
+            <Switch
+              id="desktop-notifications"
               checked={settings.desktopNotifications}
               onCheckedChange={(checked) => setSettings(prev => ({ ...prev, desktopNotifications: checked }))}
             />
           </div>
         </CardContent>
       </Card>
-      
+
       <div className="text-right text-xs text-neutral-500">
         <p>Settings are saved automatically.</p>
       </div>

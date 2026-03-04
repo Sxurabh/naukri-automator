@@ -1,0 +1,13 @@
+services:
+  naukri-automator:
+    build: .
+    container_name: naukri-automator
+    ports:
+      - "3000:3000"
+    environment:
+      - NODE_ENV=production
+      - DOCKER_MODE=true
+      - HEADLESS_MODE=true
+    restart: unless-stopped
+    # Increase shared memory size for Chromium
+    shm_size: '2gb'
