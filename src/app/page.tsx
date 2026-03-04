@@ -2,19 +2,23 @@
 "use client";
 
 import { useState, useEffect, useRef } from 'react';
-import { Monitor, Settings, Bot, KeyRound, Briefcase, Target, Archive, X, LoaderCircle, AlertTriangle, CheckCheck } from "lucide-react";
+import { Monitor, Settings, Bot, KeyRound, Briefcase, Target, Archive, X, LoaderCircle, AlertTriangle, CheckCheck, BookOpen } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { AgentLogsPage } from './views/agent-logs';
 import { SettingsPage } from './views/settings';
 import { AppliedJobsPage } from './views/applied-jobs';
+import { QuestionBankPage } from './views/question-bank';
 import useLocalStorage from './lib/hooks/useLocalStorage';
+import type { QuestionBankEntry, ScrapedQuestion } from './lib/questionBank';
+import { mergeIntoBankEntries } from './lib/questionBank';
 
 export interface AppSettings {
   jobsPerMission: number;
   stealthMode: boolean;
   desktopNotifications: boolean;
+  autoFillEnabled: boolean;
 }
 export type SetAppSettings = React.Dispatch<React.SetStateAction<AppSettings>>;
 
@@ -38,10 +42,12 @@ interface CommandCenterProps {
   setNaukriCookie: (value: string) => void;
   appliedJobIds: string[];
   onMissionComplete: (log: MissionLog, newIds: string[]) => void;
+  onQuestionsScraped: (questions: ScrapedQuestion[]) => void;
   jobSections: JobSection[];
   sectionsLoading: boolean;
   sectionsError: string | null;
   settings: AppSettings;
+  questionBank: QuestionBankEntry[];
 }
 
 function CommandCenter({
@@ -49,10 +55,12 @@ function CommandCenter({
   setNaukriCookie,
   appliedJobIds,
   onMissionComplete,
+  onQuestionsScraped,
   jobSections,
   sectionsLoading,
   sectionsError,
   settings,
+  questionBank,
 }: CommandCenterProps) {
   const [selectedSection, setSelectedSection] = useState("");
   const [logs, setLogs] = useState<string[]>(['[SYSTEM] Standby. Awaiting mission parameters...']);
@@ -80,7 +88,7 @@ function CommandCenter({
       setLogs(prev => [...prev, "[ERROR] TARGET_SECTOR must be selected."]);
       return;
     }
-    
+
     setIsLoading(true);
     const missionId = `RUN-${new Date().toISOString().replace(/[-:.]/g, '').slice(0, -4)}`;
     const missionStartTime = new Date();
@@ -94,11 +102,12 @@ function CommandCenter({
       const response = await fetch('/api/start-automation', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ 
-          cookie: naukriCookie, 
+        body: JSON.stringify({
+          cookie: naukriCookie,
           section: selectedSection,
           appliedJobIds: appliedJobIds,
-          settings: settings, // Pass settings to the API
+          settings: settings,
+          questionBank: questionBank,
         }),
       });
 
@@ -112,7 +121,7 @@ function CommandCenter({
         if (done) break;
         const chunk = decoder.decode(value, { stream: true });
         const newLogEntries = chunk.split('\n').filter(Boolean);
-        
+
         const displayLogs: string[] = [];
         newLogEntries.forEach(line => {
           if (line.startsWith('APPLIED_JOB_IDS:')) {
@@ -124,6 +133,15 @@ function CommandCenter({
             } catch (e) {
               console.error("Failed to parse applied job IDs", e);
             }
+          } else if (line.startsWith('SCRAPED_QUESTIONS:')) {
+            try {
+              const questions = JSON.parse(line.substring('SCRAPED_QUESTIONS:'.length));
+              if (Array.isArray(questions)) {
+                onQuestionsScraped(questions);
+              }
+            } catch (e) {
+              console.error("Failed to parse scraped questions", e);
+            }
           } else {
             displayLogs.push(line);
           }
@@ -134,11 +152,11 @@ function CommandCenter({
           tempLogs.push(...displayLogs);
         }
       }
-      
+
     } catch (error: any) {
-        const fatalLog = `[FATAL] ${error.message}`;
-        setLogs(prev => [...prev, fatalLog]);
-        tempLogs.push(fatalLog);
+      const fatalLog = `[FATAL] ${error.message}`;
+      setLogs(prev => [...prev, fatalLog]);
+      tempLogs.push(fatalLog);
     } finally {
       const endLog = `[END] Mission concluded. Agent returned.`;
       setLogs(prev => [...prev, endLog]);
@@ -146,7 +164,7 @@ function CommandCenter({
       setIsLoading(false);
 
       const missionStatus = tempLogs.some(log => log.includes('FATAL') || log.includes('ERROR')) ? 'Failed' : 'Success';
-      
+
       onMissionComplete({
         id: missionId,
         status: missionStatus,
@@ -164,90 +182,90 @@ function CommandCenter({
 
   return (
     <div className="flex-1 overflow-hidden p-6 flex flex-col gap-6">
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-          <Card className="bg-neutral-900 border-neutral-800 flex flex-col">
-            <CardHeader>
-              <CardTitle className="text-sm font-medium text-neutral-300 tracking-wider flex items-center gap-2"><KeyRound className="w-4 h-4 text-orange-500"/>AGENT AUTH TOKEN</CardTitle>
-            </CardHeader>
-            <CardContent className="flex-grow">
-                <Textarea
-                id="cookie"
-                className="h-full resize-none bg-neutral-950 border-neutral-700 text-green-400 placeholder:text-neutral-500 focus:ring-orange-500"
-                placeholder="Paste nauk_at cookie..."
-                value={naukriCookie}
-                onChange={(e) => setNaukriCookie(e.target.value)}
-              />
-            </CardContent>
-          </Card>
-          <Card className="bg-neutral-900 border-neutral-800 flex flex-col">
-            <CardHeader>
-              <CardTitle className="text-sm font-medium text-neutral-300 tracking-wider flex items-center gap-2"><Briefcase className="w-4 h-4 text-orange-500"/>TARGET SECTOR</CardTitle>
-            </CardHeader>
-            <CardContent className="grid grid-cols-2 gap-2 flex-grow">
-              {sectionsLoading ? (
-                Array.from({ length: 4 }).map((_, i) => <div key={i} className="h-full bg-neutral-800 animate-pulse rounded-md"></div>)
-              ) : sectionsError ? (
-                <div className="col-span-2 flex items-center justify-center text-xs text-red-400 text-center p-4 bg-red-500/10 border border-red-500/20 rounded-md">
-                  <div className="flex flex-col items-center gap-2">
-                    <AlertTriangle className="w-6 h-6"/>
-                    <p>{sectionsError}</p>
-                  </div>
-                </div>
-              ) : jobSections.length > 0 ? (
-                jobSections.map(section => (
-                  <Button key={section.name} variant="outline" onClick={() => setSelectedSection(section.name)}
-                    className={`justify-center text-xs h-full ${ selectedSection === section.name ? 'bg-orange-500/20 border-orange-500/50 text-orange-300' : 'border-neutral-700 text-neutral-400 hover:bg-neutral-800 hover:text-neutral-300 bg-transparent'}`}
-                  >
-                    {section.name.toUpperCase()} ({section.count})
-                  </Button>
-                ))
-              ) : (
-                <div className="col-span-2 flex items-center justify-center text-xs text-neutral-500">
-                  <p>Enter your auth token to load sections.</p>
-                </div>
-              )}
-            </CardContent>
-          </Card>
-          <Card className="bg-neutral-900 border-neutral-800 flex flex-col">
-            <CardHeader>
-                <CardTitle className="text-sm font-medium text-neutral-300 tracking-wider flex items-center gap-2"><Target className="w-4 h-4 text-orange-500"/>MISSION CONTROL</CardTitle>
-            </CardHeader>
-            <CardContent className="flex flex-col gap-4 flex-grow justify-between">
-                <div className="text-xs text-neutral-400 border border-neutral-800 bg-neutral-950 p-3 rounded-md space-y-1">
-                  <p>TARGET: <span className="text-orange-400">{selectedSection ? selectedSection.toUpperCase() : 'N/A'}</span></p>
-                  <p>STATUS: <span className="text-white">{isLoading ? 'ACTIVE' : 'STANDBY'}</span></p>
-                </div>
-                  <Button onClick={handleStartAutomation} disabled={isLoading || !selectedSection || sectionsError !== null}
-                    className="w-full h-12 bg-orange-600 text-white font-bold hover:bg-orange-700 disabled:bg-neutral-700 disabled:text-neutral-400 disabled:cursor-not-allowed transition-colors text-sm tracking-widest"
-                  >
-                    {isLoading ? "IN PROGRESS..." : "INITIATE MISSION"}
-                </Button>
-            </CardContent>
-          </Card>
-        </div>
-        <Card className="bg-neutral-900 border-neutral-800 flex-grow flex flex-col min-h-0">
-          <CardHeader className="flex flex-row items-center justify-between">
-              <CardTitle className="text-sm font-medium text-neutral-300 tracking-wider flex items-center gap-2"><Bot className="w-4 h-4 text-orange-500"/>LIVE MISSION FEED</CardTitle>
-              <Button variant="ghost" size="icon" className="h-7 w-7 text-neutral-400 hover:text-white" onClick={clearLogs}>
-                <X className="w-4 h-4" />
-              </Button>
+      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+        <Card className="bg-neutral-900 border-neutral-800 flex flex-col">
+          <CardHeader>
+            <CardTitle className="text-sm font-medium text-neutral-300 tracking-wider flex items-center gap-2"><KeyRound className="w-4 h-4 text-orange-500" />AGENT AUTH TOKEN</CardTitle>
           </CardHeader>
-          <CardContent className="flex-grow overflow-hidden">
-              <div id="system-log" className="h-full text-xs overflow-y-auto pr-2 space-y-2 font-mono custom-scrollbar">
-                  {logs.map((log, index) => {
-                  const color = log.includes('ERROR') || log.includes('FATAL') ? 'text-red-400' : log.includes('WARN') ? 'text-yellow-400' : log.includes('SUCCESS') ? 'text-green-400' : log.includes('[INIT]') || log.includes('[END]') ? 'text-orange-400' : 'text-neutral-400';
-                  return (
-                      <p key={index} className="whitespace-pre-wrap">
-                        <span className="text-neutral-600 mr-2">&gt;</span>
-                        <span className={color}>{log}</span>
-                      </p>
-                  );
-                  })}
-                  {isLoading && <p className="text-yellow-400 animate-pulse"> &gt; Agent active. Awaiting field response...</p>}
-                  <div ref={logsEndRef} />
-              </div>
+          <CardContent className="flex-grow">
+            <Textarea
+              id="cookie"
+              className="h-full resize-none bg-neutral-950 border-neutral-700 text-green-400 placeholder:text-neutral-500 focus:ring-orange-500"
+              placeholder="Paste nauk_at cookie..."
+              value={naukriCookie}
+              onChange={(e) => setNaukriCookie(e.target.value)}
+            />
           </CardContent>
         </Card>
+        <Card className="bg-neutral-900 border-neutral-800 flex flex-col">
+          <CardHeader>
+            <CardTitle className="text-sm font-medium text-neutral-300 tracking-wider flex items-center gap-2"><Briefcase className="w-4 h-4 text-orange-500" />TARGET SECTOR</CardTitle>
+          </CardHeader>
+          <CardContent className="grid grid-cols-2 gap-2 flex-grow">
+            {sectionsLoading ? (
+              Array.from({ length: 4 }).map((_, i) => <div key={i} className="h-full bg-neutral-800 animate-pulse rounded-md"></div>)
+            ) : sectionsError ? (
+              <div className="col-span-2 flex items-center justify-center text-xs text-red-400 text-center p-4 bg-red-500/10 border border-red-500/20 rounded-md">
+                <div className="flex flex-col items-center gap-2">
+                  <AlertTriangle className="w-6 h-6" />
+                  <p>{sectionsError}</p>
+                </div>
+              </div>
+            ) : jobSections.length > 0 ? (
+              jobSections.map(section => (
+                <Button key={section.name} variant="outline" onClick={() => setSelectedSection(section.name)}
+                  className={`justify-center text-xs h-full ${selectedSection === section.name ? 'bg-orange-500/20 border-orange-500/50 text-orange-300' : 'border-neutral-700 text-neutral-400 hover:bg-neutral-800 hover:text-neutral-300 bg-transparent'}`}
+                >
+                  {section.name.toUpperCase()} ({section.count})
+                </Button>
+              ))
+            ) : (
+              <div className="col-span-2 flex items-center justify-center text-xs text-neutral-500">
+                <p>Enter your auth token to load sections.</p>
+              </div>
+            )}
+          </CardContent>
+        </Card>
+        <Card className="bg-neutral-900 border-neutral-800 flex flex-col">
+          <CardHeader>
+            <CardTitle className="text-sm font-medium text-neutral-300 tracking-wider flex items-center gap-2"><Target className="w-4 h-4 text-orange-500" />MISSION CONTROL</CardTitle>
+          </CardHeader>
+          <CardContent className="flex flex-col gap-4 flex-grow justify-between">
+            <div className="text-xs text-neutral-400 border border-neutral-800 bg-neutral-950 p-3 rounded-md space-y-1">
+              <p>TARGET: <span className="text-orange-400">{selectedSection ? selectedSection.toUpperCase() : 'N/A'}</span></p>
+              <p>STATUS: <span className="text-white">{isLoading ? 'ACTIVE' : 'STANDBY'}</span></p>
+            </div>
+            <Button onClick={handleStartAutomation} disabled={isLoading || !selectedSection || sectionsError !== null}
+              className="w-full h-12 bg-orange-600 text-white font-bold hover:bg-orange-700 disabled:bg-neutral-700 disabled:text-neutral-400 disabled:cursor-not-allowed transition-colors text-sm tracking-widest"
+            >
+              {isLoading ? "IN PROGRESS..." : "INITIATE MISSION"}
+            </Button>
+          </CardContent>
+        </Card>
+      </div>
+      <Card className="bg-neutral-900 border-neutral-800 flex-grow flex flex-col min-h-0">
+        <CardHeader className="flex flex-row items-center justify-between">
+          <CardTitle className="text-sm font-medium text-neutral-300 tracking-wider flex items-center gap-2"><Bot className="w-4 h-4 text-orange-500" />LIVE MISSION FEED</CardTitle>
+          <Button variant="ghost" size="icon" className="h-7 w-7 text-neutral-400 hover:text-white" onClick={clearLogs}>
+            <X className="w-4 h-4" />
+          </Button>
+        </CardHeader>
+        <CardContent className="flex-grow overflow-hidden">
+          <div id="system-log" className="h-full text-xs overflow-y-auto pr-2 space-y-2 font-mono custom-scrollbar">
+            {logs.map((log, index) => {
+              const color = log.includes('ERROR') || log.includes('FATAL') ? 'text-red-400' : log.includes('WARN') ? 'text-yellow-400' : log.includes('SUCCESS') ? 'text-green-400' : log.includes('[INIT]') || log.includes('[END]') ? 'text-orange-400' : 'text-neutral-400';
+              return (
+                <p key={index} className="whitespace-pre-wrap">
+                  <span className="text-neutral-600 mr-2">&gt;</span>
+                  <span className={color}>{log}</span>
+                </p>
+              );
+            })}
+            {isLoading && <p className="text-yellow-400 animate-pulse"> &gt; Agent active. Awaiting field response...</p>}
+            <div ref={logsEndRef} />
+          </div>
+        </CardContent>
+      </Card>
     </div>
   )
 }
@@ -259,7 +277,7 @@ export default function TacticalDashboard() {
   const [lastRun, setLastRun] = useLocalStorage("lastRun", "N/A");
   const [appliedJobIds, setAppliedJobIds] = useLocalStorage<string[]>("appliedJobIds", []);
   const [naukriCookie, setNaukriCookie] = useLocalStorage("naukriCookie", "");
-  
+
   const [jobSections, setJobSections] = useState<JobSection[]>([]);
   const [sectionsLoading, setSectionsLoading] = useState(false);
   const [sectionsError, setSectionsError] = useState<string | null>(null);
@@ -268,7 +286,10 @@ export default function TacticalDashboard() {
     jobsPerMission: 5,
     stealthMode: true,
     desktopNotifications: false,
+    autoFillEnabled: false,
   });
+
+  const [questionBank, setQuestionBank] = useLocalStorage<QuestionBankEntry[]>("questionBank", []);
 
   const jobsApplied = appliedJobIds.length;
 
@@ -296,7 +317,7 @@ export default function TacticalDashboard() {
         }
         const data = await response.json();
         if (data.length === 0) {
-            throw new Error("No job sections found. The page might have changed or the cookie is partially invalid.");
+          throw new Error("No job sections found. The page might have changed or the cookie is partially invalid.");
         }
         setJobSections(data);
       } catch (error: any) {
@@ -309,7 +330,7 @@ export default function TacticalDashboard() {
     };
 
     const debounceFetch = setTimeout(() => {
-        fetchSections();
+      fetchSections();
     }, 500);
 
     return () => clearTimeout(debounceFetch);
@@ -320,6 +341,13 @@ export default function TacticalDashboard() {
     if (log.status === 'Success' && newIds.length > 0) {
       setLastRun(log.date);
       setAppliedJobIds(prev => [...new Set([...prev, ...newIds])]);
+    }
+  };
+
+  const handleQuestionsScraped = (questions: ScrapedQuestion[]) => {
+    const { updatedBank, newCount } = mergeIntoBankEntries(questionBank, questions);
+    if (newCount > 0) {
+      setQuestionBank(updatedBank);
     }
   };
 
@@ -336,42 +364,51 @@ export default function TacticalDashboard() {
     return () => clearInterval(intervalId);
   }, []);
 
+  const unansweredCount = questionBank.filter(q => !q.answer).length;
+
   const navItems = [
     { id: 'center', label: 'COMMAND CENTER', icon: Monitor },
     { id: 'applied', label: 'APPLIED JOBS', icon: CheckCheck },
+    { id: 'qbank', label: 'QUESTION BANK', icon: BookOpen, badge: unansweredCount > 0 ? unansweredCount : undefined },
     { id: 'logs', label: 'MISSION ARCHIVE', icon: Archive },
     { id: 'settings', label: 'SETTINGS', icon: Settings },
   ]
 
   const renderContent = () => {
-    switch(activeSection) {
+    switch (activeSection) {
       case 'center':
-        return <CommandCenter 
+        return <CommandCenter
           naukriCookie={naukriCookie}
           setNaukriCookie={setNaukriCookie}
-          appliedJobIds={appliedJobIds} 
+          appliedJobIds={appliedJobIds}
           onMissionComplete={handleMissionComplete}
+          onQuestionsScraped={handleQuestionsScraped}
           jobSections={jobSections}
           sectionsLoading={sectionsLoading}
           sectionsError={sectionsError}
           settings={settings}
+          questionBank={questionBank}
         />;
       case 'applied':
         return <AppliedJobsPage appliedJobIds={appliedJobIds} clearAppliedJobs={clearAllHistory} />;
+      case 'qbank':
+        return <QuestionBankPage questionBank={questionBank} setQuestionBank={setQuestionBank} settings={settings} setSettings={setSettings} />;
       case 'logs':
         return <AgentLogsPage missionLogs={missionLogs} clearArchive={clearAllHistory} />;
       case 'settings':
         return <SettingsPage settings={settings} setSettings={setSettings} />;
       default:
-        return <CommandCenter 
+        return <CommandCenter
           naukriCookie={naukriCookie}
           setNaukriCookie={setNaukriCookie}
-          appliedJobIds={appliedJobIds} 
+          appliedJobIds={appliedJobIds}
           onMissionComplete={handleMissionComplete}
+          onQuestionsScraped={handleQuestionsScraped}
           jobSections={jobSections}
           sectionsLoading={sectionsLoading}
           sectionsError={sectionsError}
           settings={settings}
+          questionBank={questionBank}
         />;
     }
   }
@@ -384,14 +421,17 @@ export default function TacticalDashboard() {
           <p className="text-neutral-500 text-xs">v1.4.0 / AUTOMATOR</p>
         </div>
         <nav className="flex-grow p-4 space-y-2">
-            {navItems.map(item => (
-              <button key={item.id} onClick={() => setActiveSection(item.id)}
-                className={`w-full flex items-center gap-3 p-3 rounded transition-colors text-left ${activeSection === item.id ? 'bg-orange-500/10 text-orange-400 border border-orange-500/30' : 'text-neutral-400 hover:text-white hover:bg-neutral-800'}`}
-              >
-                  <item.icon className="w-5 h-5" />
-                  <span className="text-sm font-medium">{item.label}</span>
-              </button>
-            ))}
+          {navItems.map(item => (
+            <button key={item.id} onClick={() => setActiveSection(item.id)}
+              className={`w-full flex items-center gap-3 p-3 rounded transition-colors text-left ${activeSection === item.id ? 'bg-orange-500/10 text-orange-400 border border-orange-500/30' : 'text-neutral-400 hover:text-white hover:bg-neutral-800'}`}
+            >
+              <item.icon className="w-5 h-5" />
+              <span className="text-sm font-medium flex-1">{item.label}</span>
+              {'badge' in item && item.badge && (
+                <span className="text-[10px] bg-red-500 text-white rounded-full w-5 h-5 flex items-center justify-center font-bold">{item.badge}</span>
+              )}
+            </button>
+          ))}
         </nav>
         <div className="p-4 border-t border-neutral-800">
           <div className="p-4 bg-neutral-800 border border-neutral-700 rounded">
@@ -409,13 +449,13 @@ export default function TacticalDashboard() {
 
       <main className="flex-1 flex flex-col">
         <div className="h-16 bg-neutral-900 border-b border-neutral-800 flex items-center justify-between px-6 flex-shrink-0">
-            <div className="text-sm text-neutral-400 flex items-center gap-2">
-              TACTICAL COMMAND / <span className="text-orange-500">{navItems.find(i => i.id === activeSection)?.label}</span>
-              {sectionsLoading && <LoaderCircle className="w-4 h-4 animate-spin text-neutral-500"/>}
-            </div>
-            <div className="text-xs text-neutral-500">
-              LAST SYNC: {currentTime}
-            </div>
+          <div className="text-sm text-neutral-400 flex items-center gap-2">
+            TACTICAL COMMAND / <span className="text-orange-500">{navItems.find(i => i.id === activeSection)?.label}</span>
+            {sectionsLoading && <LoaderCircle className="w-4 h-4 animate-spin text-neutral-500" />}
+          </div>
+          <div className="text-xs text-neutral-500">
+            LAST SYNC: {currentTime}
+          </div>
         </div>
         {renderContent()}
       </main>
