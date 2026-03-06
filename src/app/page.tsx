@@ -310,7 +310,7 @@ export default function TacticalDashboard() {
   const [currentTime, setCurrentTime] = useState("...");
   const [missionLogs, setMissionLogs] = useLocalStorage<MissionLog[]>("missionLogs", []);
   const [lastRun, setLastRun] = useLocalStorage("lastRun", "N/A");
-  const [appliedJobIds, setAppliedJobIds] = useLocalStorage<string[]>("appliedJobIds", []);
+  const [appliedJobIds, setAppliedJobIds] = useState<string[]>([]);
   const [naukriCookie, setNaukriCookie] = useLocalStorage("naukriCookie", "");
 
   const [jobSections, setJobSections] = useState<JobSection[]>([]);
@@ -324,18 +324,47 @@ export default function TacticalDashboard() {
     autoFillEnabled: false,
   });
 
-  const [questionBank, setQuestionBank] = useLocalStorage<QuestionBankEntry[]>("questionBank", []);
+  const [questionBank, setQuestionBank] = useState<QuestionBankEntry[]>([]);
+  const [isDbLoaded, setIsDbLoaded] = useState(false);
 
   const jobsApplied = appliedJobIds.length;
 
   useEffect(() => {
-    // Keep the live in-memory store updated for any active missions
-    fetch('/api/update-bank', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ questionBank }),
-    }).catch(console.error);
-  }, [questionBank]);
+    const initDB = async () => {
+      try {
+        await fetch('/api/db/init');
+        const [qRes, jRes] = await Promise.all([
+          fetch('/api/db/questions'),
+          fetch('/api/db/jobs')
+        ]);
+        if (qRes.ok) {
+          const questions = await qRes.json();
+          setQuestionBank(questions);
+        }
+        if (jRes.ok) {
+          const jobs = await jRes.json();
+          setAppliedJobIds(jobs);
+        }
+        setIsDbLoaded(true);
+      } catch (err) {
+        console.error("Failed to initialize or fetch DB:", err);
+        setIsDbLoaded(true);
+      }
+    };
+    initDB();
+  }, []);
+
+  useEffect(() => {
+    // Keep the live SQLite store updated for any active missions
+    // This runs when questionBank state changes manually.
+    if (isDbLoaded && questionBank.length > 0) {
+      fetch('/api/db/questions', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ questionBank }),
+      }).catch(console.error);
+    }
+  }, [questionBank, isDbLoaded]);
 
   useEffect(() => {
     const fetchSections = async () => {
@@ -384,43 +413,52 @@ export default function TacticalDashboard() {
     setMissionLogs(prev => [log, ...prev].slice(0, 100));
     if (log.status === 'Success' && newIds.length > 0) {
       setLastRun(log.date);
-      setAppliedJobIds(prev => [...new Set([...prev, ...newIds])]);
+      setAppliedJobIds(prev => {
+        const updatedIds = [...new Set([...prev, ...newIds])];
+        return updatedIds;
+      });
+      // Fire-and-forget save to DB
+      fetch('/api/db/jobs', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ jobIds: newIds }),
+      }).catch(console.error);
     }
   };
 
   const handleQuestionsScraped = (questions: ScrapedQuestion[]) => {
-    const { updatedBank, newCount } = mergeIntoBankEntries(questionBank, questions);
-    if (newCount > 0) {
-      setQuestionBank(updatedBank);
-    }
+    setQuestionBank(prevBank => {
+      const { updatedBank } = mergeIntoBankEntries(prevBank, questions);
+      return updatedBank;
+    });
   };
 
   const handleVerifiedAnswers = (answers: QuestionBankEntry[]) => {
-    let changed = false;
-    const updatedBank = [...questionBank];
+    setQuestionBank(prevBank => {
+      let changed = false;
+      const updatedBank = [...prevBank];
 
-    for (const verifiedEntry of answers) {
-      if (!verifiedEntry.answer) continue;
+      for (const verifiedEntry of answers) {
+        if (!verifiedEntry.answer) continue;
 
-      const existingIndex = updatedBank.findIndex(e => e.id === verifiedEntry.id);
+        const existingIndex = updatedBank.findIndex(e => e.id === verifiedEntry.id);
 
-      if (existingIndex >= 0) {
-        if (updatedBank[existingIndex].answer !== verifiedEntry.answer) {
-          updatedBank[existingIndex] = {
-            ...updatedBank[existingIndex],
-            answer: verifiedEntry.answer,
-          };
+        if (existingIndex >= 0) {
+          if (updatedBank[existingIndex].answer !== verifiedEntry.answer) {
+            updatedBank[existingIndex] = {
+              ...updatedBank[existingIndex],
+              answer: verifiedEntry.answer,
+            };
+            changed = true;
+          }
+        } else {
+          updatedBank.push(verifiedEntry);
           changed = true;
         }
-      } else {
-        updatedBank.push(verifiedEntry);
-        changed = true;
       }
-    }
 
-    if (changed) {
-      setQuestionBank(updatedBank);
-    }
+      return changed ? updatedBank : prevBank;
+    });
   };
 
   const clearAllHistory = () => {
@@ -447,44 +485,37 @@ export default function TacticalDashboard() {
   ]
 
   const renderContent = () => {
-    switch (activeSection) {
-      case 'center':
-        return <CommandCenter
-          naukriCookie={naukriCookie}
-          setNaukriCookie={setNaukriCookie}
-          appliedJobIds={appliedJobIds}
-          onMissionComplete={handleMissionComplete}
-          onQuestionsScraped={handleQuestionsScraped}
-          onVerifiedAnswers={handleVerifiedAnswers}
-          jobSections={jobSections}
-          sectionsLoading={sectionsLoading}
-          sectionsError={sectionsError}
-          settings={settings}
-          questionBank={questionBank}
-        />;
-      case 'applied':
-        return <AppliedJobsPage appliedJobIds={appliedJobIds} clearAppliedJobs={clearAllHistory} />;
-      case 'qbank':
-        return <QuestionBankPage questionBank={questionBank} setQuestionBank={setQuestionBank} settings={settings} setSettings={setSettings} />;
-      case 'logs':
-        return <AgentLogsPage missionLogs={missionLogs} clearArchive={clearAllHistory} />;
-      case 'settings':
-        return <SettingsPage settings={settings} setSettings={setSettings} />;
-      default:
-        return <CommandCenter
-          naukriCookie={naukriCookie}
-          setNaukriCookie={setNaukriCookie}
-          appliedJobIds={appliedJobIds}
-          onMissionComplete={handleMissionComplete}
-          onQuestionsScraped={handleQuestionsScraped}
-          onVerifiedAnswers={handleVerifiedAnswers}
-          jobSections={jobSections}
-          sectionsLoading={sectionsLoading}
-          sectionsError={sectionsError}
-          settings={settings}
-          questionBank={questionBank}
-        />;
-    }
+    return (
+      <>
+        <div className={`flex-1 overflow-hidden flex flex-col ${activeSection === 'center' ? '' : 'hidden'}`}>
+          <CommandCenter
+            naukriCookie={naukriCookie}
+            setNaukriCookie={setNaukriCookie}
+            appliedJobIds={appliedJobIds}
+            onMissionComplete={handleMissionComplete}
+            onQuestionsScraped={handleQuestionsScraped}
+            onVerifiedAnswers={handleVerifiedAnswers}
+            jobSections={jobSections}
+            sectionsLoading={sectionsLoading}
+            sectionsError={sectionsError}
+            settings={settings}
+            questionBank={questionBank}
+          />
+        </div>
+        <div className={`flex-1 overflow-hidden flex flex-col ${activeSection === 'applied' ? '' : 'hidden'}`}>
+          <AppliedJobsPage appliedJobIds={appliedJobIds} clearAppliedJobs={clearAllHistory} />
+        </div>
+        <div className={`flex-1 overflow-hidden flex flex-col ${activeSection === 'qbank' ? '' : 'hidden'}`}>
+          <QuestionBankPage questionBank={questionBank} setQuestionBank={setQuestionBank} settings={settings} setSettings={setSettings} />
+        </div>
+        <div className={`flex-1 overflow-hidden flex flex-col ${activeSection === 'logs' ? '' : 'hidden'}`}>
+          <AgentLogsPage missionLogs={missionLogs} clearArchive={clearAllHistory} />
+        </div>
+        <div className={`flex-1 overflow-hidden flex flex-col ${activeSection === 'settings' ? '' : 'hidden'}`}>
+          <SettingsPage settings={settings} setSettings={setSettings} />
+        </div>
+      </>
+    );
   }
 
   return (

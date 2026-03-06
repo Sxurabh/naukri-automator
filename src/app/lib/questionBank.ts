@@ -84,6 +84,16 @@ export function findBestMatch(
     bank: QuestionBankEntry[],
     threshold: number = 0.6
 ): { entry: QuestionBankEntry; score: number } | null {
+    const normalizedQuery = normalize(questionText);
+
+    // First attempt an exact match on the normalized question string
+    // This prevents duplicating questions that are entirely stop words
+    for (const entry of bank) {
+        if (normalize(entry.originalText) === normalizedQuery) {
+            return { entry, score: 1.0 };
+        }
+    }
+
     const queryKeywords = extractKeywords(questionText);
     if (queryKeywords.length === 0) return null;
 

@@ -110,12 +110,12 @@ export async function runNaukriAutomation({ cookie, section, log, appliedJobIds:
 
     log(`Selecting '${section}' tab...`);
     // Improved selector to handle exact text matching more robustly
-    const tabLocator = page.locator(`div.tab - list - item: has - text("${section}")`).first();
+    const tabLocator = page.locator(`div.tab-list-item:has-text("${section}")`).first();
     if (await tabLocator.isVisible()) {
       await tabLocator.click();
     } else {
       log(`WARN: Tab '${section}' not found exactly.Trying partial match...`);
-      await page.locator(`text = ${section} `).first().click();
+      await page.locator(`text=${section}`).first().click();
     }
 
     await randomDelay(settings);
@@ -266,7 +266,7 @@ export async function runNaukriAutomation({ cookie, section, log, appliedJobIds:
               if (fillResult.allFilled) {
                 // Try to submit the sidebar form
                 log('QUESTIONNAIRE: All questions filled. Submitting...');
-                const submitBtn = page.locator(`${SELECTORS.sidebarForm} button[type = "submit"], ${SELECTORS.sidebarForm} button: has - text("Apply"), ${SELECTORS.sidebarForm} button: has - text("Submit")`);
+                const submitBtn = page.locator(`${SELECTORS.sidebarForm} button[type="submit"], ${SELECTORS.sidebarForm} button:has-text("Apply"), ${SELECTORS.sidebarForm} button:has-text("Submit")`);
                 if (await submitBtn.count() > 0) {
                   await submitBtn.first().click();
                   await page.waitForTimeout(2000);
@@ -324,12 +324,12 @@ export async function runNaukriAutomation({ cookie, section, log, appliedJobIds:
       await randomDelay(settings);
       await page.goto(SELECTORS.recommendedJobsUrl, { waitUntil: 'domcontentloaded', timeout: 40000 });
 
-      log(`Re - selecting '${section}' tab...`);
-      const tabLocatorRetry = page.locator(`div.tab - list - item: has - text("${section}")`).first();
+      log(`Re-selecting '${section}' tab...`);
+      const tabLocatorRetry = page.locator(`div.tab-list-item:has-text("${section}")`).first();
       if (await tabLocatorRetry.isVisible()) {
         await tabLocatorRetry.click();
       } else {
-        await page.locator(`text = ${section} `).first().click();
+        await page.locator(`text=${section}`).first().click();
       }
 
       log('Waiting for jobs to render...');
