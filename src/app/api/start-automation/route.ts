@@ -16,10 +16,30 @@ export async function POST(request: Request) {
         const encoder = new TextEncoder();
 
         const log = (message: string) => {
-          controller.enqueue(encoder.encode(`${message}\n`));
+          if (request.signal.aborted) return;
+          try {
+            controller.enqueue(encoder.encode(`${message}\n`));
+          } catch (e) {
+            // Ignore errors if stream is closed
+          }
         };
 
         try {
+          // Pre-load the active question bank store before starting
+          try {
+            const proto = request.headers.get('x-forwarded-proto') ?? 'http';
+            const host = request.headers.get('host') ?? 'localhost:3000';
+            const baseUrl = `${proto}://${host}`;
+
+            await fetch(`${baseUrl}/api/update-bank`, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ questionBank: questionBank || [] }),
+            });
+          } catch (e) {
+            console.error("Failed to seed question bank API", e);
+          }
+
           const newlyAppliedIds = await runNaukriAutomation({
             cookie,
             section,
@@ -27,6 +47,20 @@ export async function POST(request: Request) {
             appliedJobIds: appliedJobIds || [],
             settings: settings || { jobsPerMission: 5, stealthMode: true },
             questionBank: questionBank || [],
+            checkAbort: () => request.signal.aborted,
+            getLatestQuestionBank: async () => {
+              try {
+                const proto = request.headers.get('x-forwarded-proto') ?? 'http';
+                const host = request.headers.get('host') ?? 'localhost:3000';
+                const baseUrl = `${proto}://${host}`;
+                const res = await fetch(`${baseUrl}/api/update-bank`);
+                if (!res.ok) return [];
+                const data = await res.json();
+                return data.questionBank || [];
+              } catch (e) {
+                return [];
+              }
+            }
           });
 
           log(`[${new Date().toLocaleTimeString()}] Automation Complete.`);
@@ -36,10 +70,14 @@ export async function POST(request: Request) {
           }
 
         } catch (e: any) {
-          console.error("Automation error:", e);
-          log(`FATAL: ${e.message}`);
+          if (!request.signal.aborted) {
+            console.error("Automation error:", e);
+            log(`FATAL: ${e.message}`);
+          }
         } finally {
-          controller.close();
+          if (!request.signal.aborted) {
+            try { controller.close(); } catch (e) { }
+          }
         }
       },
     });

@@ -1,7 +1,7 @@
 import core from 'playwright-core';
 import chromium from '@sparticuz/chromium';
-import type { QuestionBankEntry, ScrapedQuestion } from './questionBank';
-import { findBestMatch } from './questionBank';
+import type { QuestionBankEntry } from './questionBank';
+import { CHATBOT_SELECTORS, scrapeQuestionnaire, fillQuestionnaire } from './chatbotHandler';
 
 // Define AppSettings here to avoid importing from React components (page.tsx)
 export interface AppSettings {
@@ -17,6 +17,8 @@ interface AutomationParams {
   appliedJobIds: string[];
   settings: AppSettings;
   questionBank?: QuestionBankEntry[];
+  checkAbort?: () => boolean;
+  getLatestQuestionBank?: () => Promise<QuestionBankEntry[]>;
 }
 
 const SELECTORS = {
@@ -25,211 +27,25 @@ const SELECTORS = {
   jobCheckbox: 'div.tuple-check-box',
   applyButton: 'button.multi-apply-button',
   successToast: 'span.apply-message',
-  sidebarForm: 'div.chatbot_Drawer',
-  sidebarCloseIcon: 'div.chatBot-ic-cross',
+  sidebarForm: CHATBOT_SELECTORS.sidebarForm,
+  sidebarCloseIcon: CHATBOT_SELECTORS.sidebarCloseIcon,
   errorToast: 'text="There was some error processing your request"',
 };
 
 // Helper for stealth mode delays
-const randomDelay = (settings: AppSettings) => {
+const randomDelay = (settings: AppSettings, min = 500, max = 2500) => {
   if (!settings.stealthMode) return Promise.resolve();
-  const delay = Math.random() * 2000 + 500;
+  const delay = Math.random() * (max - min) + min;
   return new Promise(resolve => setTimeout(resolve, delay));
 }
 
-/**
- * Scrape all questionnaire fields from the Naukri sidebar/chatbot drawer
- */
-async function scrapeQuestionnaire(page: core.Page, log: (msg: string) => void): Promise<ScrapedQuestion[]> {
-  const questions: ScrapedQuestion[] = [];
-  try {
-    // Wait for the sidebar form content to fully render
-    await page.waitForTimeout(2000);
-
-    const sidebar = page.locator(SELECTORS.sidebarForm);
-
-    // Scrape text inputs
-    const textInputs = await sidebar.locator('input[type="text"], input:not([type])').all();
-    for (const input of textInputs) {
-      const label = await getClosestLabel(input, page);
-      if (label) {
-        questions.push({ text: label, inputType: 'text', options: null });
-      }
-    }
-
-    // Scrape textareas as text
-    const textareas = await sidebar.locator('textarea').all();
-    for (const ta of textareas) {
-      const label = await getClosestLabel(ta, page);
-      if (label) {
-        questions.push({ text: label, inputType: 'text', options: null });
-      }
-    }
-
-    // Scrape dropdowns
-    const selects = await sidebar.locator('select').all();
-    for (const select of selects) {
-      const label = await getClosestLabel(select, page);
-      const options = await select.locator('option').allInnerTexts();
-      const filteredOptions = options.filter(o => o.trim() && o !== 'Select' && o !== '--Select--');
-      if (label) {
-        questions.push({ text: label, inputType: 'dropdown', options: filteredOptions });
-      }
-    }
-
-    // Scrape radio buttons (group by name)
-    const radioGroups = new Map<string, string[]>();
-    const radioLabels = new Map<string, string>();
-    const radios = await sidebar.locator('input[type="radio"]').all();
-    for (const radio of radios) {
-      const name = await radio.getAttribute('name') || 'unknown';
-      const radioLabel = await getClosestLabel(radio, page);
-      if (radioLabel) {
-        if (!radioGroups.has(name)) {
-          radioGroups.set(name, []);
-          // Try to find the group question text (usually a parent label or div)
-          const groupLabel = await getGroupLabel(radio, page);
-          radioLabels.set(name, groupLabel || radioLabel);
-        }
-        radioGroups.get(name)!.push(radioLabel);
-      }
-    }
-    for (const [name, options] of radioGroups) {
-      questions.push({ text: radioLabels.get(name) || name, inputType: 'radio', options });
-    }
-
-    log(`QUESTIONNAIRE: Scraped ${questions.length} questions from sidebar`);
-  } catch (e: any) {
-    log(`WARN: Error scraping questionnaire: ${e.message}`);
-  }
-  return questions;
-}
-
-/**
- * Get the closest label text for a form element
- */
-async function getClosestLabel(element: core.Locator, page: core.Page): Promise<string | null> {
-  try {
-    // Try aria-label first
-    const ariaLabel = await element.getAttribute('aria-label');
-    if (ariaLabel) return ariaLabel.trim();
-
-    // Try id -> for label
-    const id = await element.getAttribute('id');
-    if (id) {
-      const label = page.locator(`label[for="${id}"]`);
-      if (await label.count() > 0) {
-        return (await label.first().innerText()).trim();
-      }
-    }
-
-    // Try placeholder
-    const placeholder = await element.getAttribute('placeholder');
-    if (placeholder) return placeholder.trim();
-
-    // Try parent label
-    const parentLabel = element.locator('xpath=ancestor::label');
-    if (await parentLabel.count() > 0) {
-      return (await parentLabel.first().innerText()).trim();
-    }
-
-    // Try preceding sibling or previous element text
-    const prevSibling = element.locator('xpath=preceding-sibling::*[1]');
-    if (await prevSibling.count() > 0) {
-      const text = (await prevSibling.first().innerText()).trim();
-      if (text.length > 3 && text.length < 200) return text;
-    }
-
-    return null;
-  } catch {
-    return null;
-  }
-}
-
-/**
- * Get the group label for radio buttons (the question text before the radio group)
- */
-async function getGroupLabel(radio: core.Locator, page: core.Page): Promise<string | null> {
-  try {
-    const parent = radio.locator('xpath=ancestor::div[contains(@class, "question") or contains(@class, "field") or contains(@class, "form-group")]');
-    if (await parent.count() > 0) {
-      const labels = await parent.first().locator('label, .question-text, span').all();
-      for (const label of labels) {
-        const text = (await label.innerText()).trim();
-        if (text.length > 5 && text.length < 200) return text;
-      }
-    }
-    return null;
-  } catch {
-    return null;
-  }
-}
-
-/**
- * Auto-fill a questionnaire sidebar with answers from the question bank
- */
-async function fillQuestionnaire(
-  page: core.Page,
-  questions: ScrapedQuestion[],
-  bank: QuestionBankEntry[],
-  log: (msg: string) => void
-): Promise<boolean> {
-  const sidebar = page.locator(SELECTORS.sidebarForm);
-  let allFilled = true;
-
-  for (const question of questions) {
-    const match = findBestMatch(question.text, bank);
-    if (!match || !match.entry.answer) {
-      log(`  Q: "${question.text}" → NO MATCH (needs answer in Question Bank)`);
-      allFilled = false;
-      continue;
-    }
-
-    log(`  Q: "${question.text}" → MATCHED (score: ${match.score.toFixed(2)}) → "${match.entry.answer}"`);
-
-    try {
-      if (question.inputType === 'text') {
-        // Find the matching input and fill it
-        const inputs = await sidebar.locator('input[type="text"], input:not([type]), textarea').all();
-        for (const input of inputs) {
-          const label = await getClosestLabel(input, page);
-          if (label && findBestMatch(label, [match.entry], 0.5)) {
-            await input.fill(match.entry.answer);
-            break;
-          }
-        }
-      } else if (question.inputType === 'dropdown') {
-        const selects = await sidebar.locator('select').all();
-        for (const select of selects) {
-          const label = await getClosestLabel(select, page);
-          if (label && findBestMatch(label, [match.entry], 0.5)) {
-            await select.selectOption({ label: match.entry.answer });
-            break;
-          }
-        }
-      } else if (question.inputType === 'radio') {
-        // Click the radio option that matches the answer
-        const radioLabel = sidebar.locator(`label:has-text("${match.entry.answer}")`);
-        if (await radioLabel.count() > 0) {
-          await radioLabel.first().click();
-        }
-      }
-    } catch (e: any) {
-      log(`  WARN: Failed to fill "${question.text}": ${e.message}`);
-      allFilled = false;
-    }
-  }
-
-  return allFilled;
-}
-
-export async function runNaukriAutomation({ cookie, section, log, appliedJobIds: appliedJobIdsFromClient, settings, questionBank }: AutomationParams): Promise<string[]> {
+export async function runNaukriAutomation({ cookie, section, log, appliedJobIds: appliedJobIdsFromClient, settings, questionBank, checkAbort, getLatestQuestionBank }: AutomationParams): Promise<string[]> {
   let browser: core.Browser | null = null;
   let page: core.Page | null = null;
   try {
     log('Preparing browser...');
-    log(`STEALTH MODE: ${settings.stealthMode ? 'ENABLED' : 'DISABLED'}`);
-    log(`JOBS PER MISSION: ${settings.jobsPerMission}`);
+    log(`STEALTH MODE: ${settings.stealthMode ? 'ENABLED' : 'DISABLED'} `);
+    log(`JOBS PER MISSION: ${settings.jobsPerMission} `);
 
     const isDocker = process.env.DOCKER_MODE === 'true';
     const isProduction = process.env.NODE_ENV === 'production';
@@ -254,7 +70,7 @@ export async function runNaukriAutomation({ cookie, section, log, appliedJobIds:
       });
     } else {
       // Local or GitHub Actions Environment
-      log(`Launching in Dev/CLI Mode (Standard Playwright). Headless: ${explicitHeadless}`);
+      log(`Launching in Dev / CLI Mode(Standard Playwright).Headless: ${explicitHeadless} `);
       // Dynamic import prevents Vercel build errors
       const playwright = await import('playwright');
       browser = await playwright.chromium.launch({
@@ -294,12 +110,12 @@ export async function runNaukriAutomation({ cookie, section, log, appliedJobIds:
 
     log(`Selecting '${section}' tab...`);
     // Improved selector to handle exact text matching more robustly
-    const tabLocator = page.locator(`div.tab-list-item:has-text("${section}")`).first();
+    const tabLocator = page.locator(`div.tab - list - item: has - text("${section}")`).first();
     if (await tabLocator.isVisible()) {
       await tabLocator.click();
     } else {
-      log(`WARN: Tab '${section}' not found exactly. Trying partial match...`);
-      await page.locator(`text=${section}`).first().click();
+      log(`WARN: Tab '${section}' not found exactly.Trying partial match...`);
+      await page.locator(`text = ${section} `).first().click();
     }
 
     await randomDelay(settings);
@@ -313,6 +129,11 @@ export async function runNaukriAutomation({ cookie, section, log, appliedJobIds:
     const BATCH_SIZE = settings.jobsPerMission;
 
     while (true) {
+      if (checkAbort && checkAbort()) {
+        log('MISSION ABORTED BY USER.');
+        break;
+      }
+
       log('Scanning for new jobs to apply to...');
       const allJobArticles = await page.locator(SELECTORS.jobArticle).all();
 
@@ -341,20 +162,39 @@ export async function runNaukriAutomation({ cookie, section, log, appliedJobIds:
 
       const MAX_BATCH_SIZE = 5;
       const remainingToApply = settings.jobsPerMission - totalAppliedCount;
-      const currentBatchSize = Math.min(MAX_BATCH_SIZE, remainingToApply);
-
-      log(`Found ${candidateJobs.length} new jobs. Preparing a batch of up to ${currentBatchSize}...`);
+      const currentBatchSize = Math.min(candidateJobs.length, MAX_BATCH_SIZE, remainingToApply);
+      // Recommendation 8: Progress logging
+      log(`[BATCH START] Selecting ${currentBatchSize} jobs(${totalAppliedCount} / ${settings.jobsPerMission} applied so far)...`);
 
       const batchToProcess = candidateJobs.slice(0, currentBatchSize);
       const jobIdsInThisBatch: string[] = [];
 
+      // Recommendation 7: Parallel selection
+      // Instead of awaiting each click sequentially, we use Promise.all to click them concurrently
+      // with a slight stagger implemented inside the map if stealth mode is on.
       let selectedCountInBatch = 0;
-      for (const { jobElement, jobId } of batchToProcess) {
-        const checkbox = jobElement.locator(SELECTORS.jobCheckbox);
-        await checkbox.click();
-        jobIdsInThisBatch.push(jobId);
-        selectedCountInBatch++;
-        await randomDelay(settings);
+
+      const selectionPromises = batchToProcess.map(async ({ jobElement, jobId }, index) => {
+        if (checkAbort && checkAbort()) return;
+        // Stagger the clicks slightly, then click
+        await randomDelay(settings, index * 200, (index + 1) * 400);
+
+        try {
+          const checkbox = jobElement.locator(SELECTORS.jobCheckbox);
+          await checkbox.click({ timeout: 5000 });
+          jobIdsInThisBatch.push(jobId);
+          selectedCountInBatch++;
+        } catch (e) {
+          // Log but continue if one checkbox fails
+          log(`[WARN] Failed to click checkbox for job ${jobId}`);
+        }
+      });
+
+      await Promise.all(selectionPromises);
+
+      if (checkAbort && checkAbort()) {
+        log('MISSION ABORTED BY USER.');
+        break;
       }
 
       if (selectedCountInBatch === 0) {
@@ -362,92 +202,121 @@ export async function runNaukriAutomation({ cookie, section, log, appliedJobIds:
         break;
       }
 
-      log(`Selected ${selectedCountInBatch} jobs. Pausing briefly before applying...`);
+      log(`Selected ${selectedCountInBatch} jobs.Pausing briefly before applying...`);
       await page.waitForTimeout(1000);
 
-      log(`Clicking the main "Apply" button...`);
-      const applyButton = page.locator(SELECTORS.applyButton);
-      if (!await applyButton.isVisible({ timeout: 5000 })) {
-        log('WARN: "Apply" button did not appear. Aborting batch.');
-        break;
-      }
-      await applyButton.click();
+      // Recommendation 9: Retry logic for apply
+      const MAX_APPLY_RETRIES = 2;
+      let appliedSuccessfully = false;
 
-      log('Waiting for application result...');
-      const successLocator = page.locator(SELECTORS.successToast);
-      const sidebarLocator = page.locator(SELECTORS.sidebarForm);
-      const errorLocator = page.locator(SELECTORS.errorToast);
-
-      const result = await Promise.race([
-        successLocator.waitFor({ state: 'visible', timeout: 20000 }).then(() => 'success'),
-        sidebarLocator.waitFor({ state: 'visible', timeout: 20000 }).then(() => 'sidebar'),
-        errorLocator.waitFor({ state: 'visible', timeout: 20000 }).then(() => 'error'),
-      ]).catch(() => {
-        log("WARN: Timed out waiting for application confirmation.");
-        return 'timeout';
-      });
-
-      if (result === 'success' || result === 'sidebar') {
-        if (result === 'success') {
-          jobIdsInThisBatch.forEach(id => sessionAppliedIds.add(id));
-          totalAppliedCount += jobIdsInThisBatch.length;
-          const successText = await successLocator.innerText();
-          log(`SUCCESS: ${successText}`);
-        } else {
-          // Sidebar detected — scrape and try to auto-fill
-          log('QUESTIONNAIRE: Sidebar detected. Scraping questions...');
-          const scrapedQuestions = await scrapeQuestionnaire(page, log);
-
-          const bank = questionBank || [];
-          const autoFillOn = settings.autoFillEnabled && bank.length > 0;
-
-          if (scrapedQuestions.length > 0 && autoFillOn) {
-            // Try to match and fill all questions
-            log('QUESTIONNAIRE: Attempting auto-fill...');
-            const allFilled = await fillQuestionnaire(page, scrapedQuestions, bank, log);
-
-            if (allFilled) {
-              // Try to submit the sidebar form
-              log('QUESTIONNAIRE: All questions filled. Submitting...');
-              const submitBtn = page.locator(`${SELECTORS.sidebarForm} button[type="submit"], ${SELECTORS.sidebarForm} button:has-text("Apply"), ${SELECTORS.sidebarForm} button:has-text("Submit")`);
-              if (await submitBtn.count() > 0) {
-                await submitBtn.first().click();
-                await page.waitForTimeout(2000);
-                jobIdsInThisBatch.forEach(id => sessionAppliedIds.add(id));
-                totalAppliedCount += jobIdsInThisBatch.length;
-                log('QUESTIONNAIRE: Successfully submitted with auto-fill!');
-              } else {
-                log('QUESTIONNAIRE: Could not find submit button. Closing sidebar.');
-              }
-            } else {
-              log('QUESTIONNAIRE: Some questions could not be matched. Skipping this job.');
-            }
-          } else if (scrapedQuestions.length > 0) {
-            log(`QUESTIONNAIRE: Auto-fill ${autoFillOn ? 'could not match' : 'is disabled'}. Scraping ${scrapedQuestions.length} questions for learning.`);
-          }
-
-          // Stream scraped questions back to frontend for bank learning
-          if (scrapedQuestions.length > 0) {
-            log(`SCRAPED_QUESTIONS:${JSON.stringify(scrapedQuestions)}`);
-          }
-
-          // Close the sidebar
-          const closeIcon = page.locator(SELECTORS.sidebarCloseIcon);
-          if (await closeIcon.isVisible()) {
-            await closeIcon.click();
-            await page.waitForTimeout(500);
-          }
+      for (let attempt = 1; attempt <= MAX_APPLY_RETRIES; attempt++) {
+        log(`Clicking the main "Apply" button(Attempt ${attempt} / ${MAX_APPLY_RETRIES})...`);
+        const applyButton = page.locator(SELECTORS.applyButton);
+        if (!await applyButton.isVisible({ timeout: 5000 })) {
+          log('WARN: "Apply" button did not appear. Aborting batch.');
+          break; // Break the retry loop
         }
-      } else if (result === 'error') {
-        log('ERROR: Naukri reported an error while processing the application. Aborting mission.');
-        break;
-      } else { // timeout
-        log('WARN: Batch application did not confirm. Aborting to prevent errors.');
-        break;
+        await applyButton.click();
+
+        log('Waiting for application result...');
+        const successLocator = page.locator(SELECTORS.successToast);
+        const sidebarLocator = page.locator(SELECTORS.sidebarForm);
+        const errorLocator = page.locator(SELECTORS.errorToast);
+
+        const result = await Promise.race([
+          successLocator.waitFor({ state: 'visible', timeout: 15000 }).then(() => 'success'),
+          sidebarLocator.waitFor({ state: 'visible', timeout: 15000 }).then(() => 'sidebar'),
+          errorLocator.waitFor({ state: 'visible', timeout: 8000 }).then(() => 'error'),
+        ]).catch(() => 'timeout');
+
+        if (result === 'success' || result === 'sidebar') {
+          appliedSuccessfully = true;
+
+          if (result === 'success') {
+            jobIdsInThisBatch.forEach(id => sessionAppliedIds.add(id));
+            totalAppliedCount += jobIdsInThisBatch.length;
+            const successText = await successLocator.innerText();
+            log(`SUCCESS: ${successText} [${totalAppliedCount} / ${settings.jobsPerMission}]`);
+          } else {
+            // Sidebar detected — scrape and try to auto-fill
+            log('QUESTIONNAIRE: Sidebar detected. Scraping questions...');
+            const scrapedQuestions = await scrapeQuestionnaire(page, log);
+
+            // Get the most up-to-date question bank if the callback is provided
+            let bank = questionBank || [];
+            if (getLatestQuestionBank) {
+              try {
+                const freshBank = await getLatestQuestionBank();
+                if (freshBank && freshBank.length > 0) {
+                  bank = freshBank;
+                  log(`QUESTIONNAIRE: Synced latest bank with ${bank.length} entries.`);
+                }
+              } catch (e) {
+                log('WARN: Could not fetch latest question bank. Using initial bank.');
+              }
+            }
+
+            const autoFillOn = settings.autoFillEnabled && bank.length > 0;
+
+            if (scrapedQuestions.length > 0 && autoFillOn) {
+              // Try to match and fill all questions
+              log('QUESTIONNAIRE: Attempting auto-fill...');
+              const fillResult = await fillQuestionnaire(page, scrapedQuestions, bank, log, checkAbort);
+
+              if (fillResult.allFilled) {
+                // Try to submit the sidebar form
+                log('QUESTIONNAIRE: All questions filled. Submitting...');
+                const submitBtn = page.locator(`${SELECTORS.sidebarForm} button[type = "submit"], ${SELECTORS.sidebarForm} button: has - text("Apply"), ${SELECTORS.sidebarForm} button: has - text("Submit")`);
+                if (await submitBtn.count() > 0) {
+                  await submitBtn.first().click();
+                  await page.waitForTimeout(2000);
+                  jobIdsInThisBatch.forEach(id => sessionAppliedIds.add(id));
+                  totalAppliedCount += jobIdsInThisBatch.length;
+                  log(`QUESTIONNAIRE: Successfully submitted with auto - fill![${totalAppliedCount}/${settings.jobsPerMission}]`);
+
+                  // Emit verified answers if any
+                  if (fillResult.verifiedAnswers.length > 0) {
+                    log(`VERIFIED_ANSWERS:${JSON.stringify(fillResult.verifiedAnswers)} `);
+                  }
+                } else {
+                  log('QUESTIONNAIRE: Could not find submit button. Closing sidebar.');
+                }
+              } else {
+                log('QUESTIONNAIRE: Some questions could not be matched. Skipping this job.');
+              }
+            } else if (scrapedQuestions.length > 0) {
+              log(`QUESTIONNAIRE: Auto - fill ${autoFillOn ? 'could not match' : 'is disabled'}. Scraping ${scrapedQuestions.length} questions for learning.`);
+            }
+
+            // Stream scraped questions back to frontend for bank learning
+            if (scrapedQuestions.length > 0) {
+              log(`SCRAPED_QUESTIONS:${JSON.stringify(scrapedQuestions)} `);
+            }
+
+            // Close the sidebar
+            const closeIcon = page.locator(SELECTORS.sidebarCloseIcon);
+            if (await closeIcon.isVisible()) {
+              await closeIcon.click();
+              await page.waitForTimeout(500);
+            }
+          }
+          break; // Break the apply retry loop on success/sidebar
+        } else if (result === 'error') {
+          log('ERROR: Naukri reported an error while processing the application.');
+          if (attempt === MAX_APPLY_RETRIES) log('Giving up on this batch.');
+          // Naukri errors might mean we hit a limit or bug, we'll continue the retry loop
+        } else { // timeout
+          log(`WARN: Batch application did not confirm(Timeout).`);
+          if (attempt === MAX_APPLY_RETRIES) log('WARN: Max retries reached. Moving on.');
+        }
+      } // end retry loop
+
+      if (!appliedSuccessfully) {
+        log('WARN: Failed to confirm application for this batch. Refresing to find fresh jobs.');
       }
 
       if (totalAppliedCount >= settings.jobsPerMission) {
-        log(`Target of ${settings.jobsPerMission} jobs reached. Mission accomplished.`);
+        log(`Target of ${settings.jobsPerMission} jobs reached.Mission accomplished.`);
         break;
       }
 
@@ -455,12 +324,12 @@ export async function runNaukriAutomation({ cookie, section, log, appliedJobIds:
       await randomDelay(settings);
       await page.goto(SELECTORS.recommendedJobsUrl, { waitUntil: 'domcontentloaded', timeout: 40000 });
 
-      log(`Re-selecting '${section}' tab...`);
-      const tabLocatorRetry = page.locator(`div.tab-list-item:has-text("${section}")`).first();
+      log(`Re - selecting '${section}' tab...`);
+      const tabLocatorRetry = page.locator(`div.tab - list - item: has - text("${section}")`).first();
       if (await tabLocatorRetry.isVisible()) {
         await tabLocatorRetry.click();
       } else {
-        await page.locator(`text=${section}`).first().click();
+        await page.locator(`text = ${section} `).first().click();
       }
 
       log('Waiting for jobs to render...');
@@ -472,23 +341,23 @@ export async function runNaukriAutomation({ cookie, section, log, appliedJobIds:
       }
     }
 
-    log(`--- MISSION SUMMARY ---`);
+    log(`-- - MISSION SUMMARY-- - `);
     log(`Batch application complete.`);
-    log(`Total jobs successfully applied to in this session: ${totalAppliedCount}`);
+    log(`Total jobs successfully applied to in this session: ${totalAppliedCount} `);
 
     return Array.from(sessionAppliedIds);
 
   } catch (error: any) {
-    log(`ERROR: ${error.message}`);
+    log(`ERROR: ${error.message} `);
     if (page) {
       try {
         // Screenshot logic for debugging (saved to ephemeral storage)
         const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
-        const screenshotPath = `/tmp/error-${timestamp}.png`;
+        const screenshotPath = `/ tmp / error - ${timestamp}.png`;
         await page.screenshot({ path: screenshotPath });
         log(`Screenshot saved to ${screenshotPath} (check artifacts if available).`);
       } catch (screenshotError: any) {
-        log(`Could not take screenshot: ${screenshotError.message}`);
+        log(`Could not take screenshot: ${screenshotError.message} `);
       }
     }
     throw error;

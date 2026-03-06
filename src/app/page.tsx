@@ -43,6 +43,7 @@ interface CommandCenterProps {
   appliedJobIds: string[];
   onMissionComplete: (log: MissionLog, newIds: string[]) => void;
   onQuestionsScraped: (questions: ScrapedQuestion[]) => void;
+  onVerifiedAnswers: (answers: QuestionBankEntry[]) => void;
   jobSections: JobSection[];
   sectionsLoading: boolean;
   sectionsError: string | null;
@@ -56,6 +57,7 @@ function CommandCenter({
   appliedJobIds,
   onMissionComplete,
   onQuestionsScraped,
+  onVerifiedAnswers,
   jobSections,
   sectionsLoading,
   sectionsError,
@@ -66,6 +68,7 @@ function CommandCenter({
   const [logs, setLogs] = useState<string[]>(['[SYSTEM] Standby. Awaiting mission parameters...']);
   const [isLoading, setIsLoading] = useState(false);
   const logsEndRef = useRef<HTMLDivElement>(null);
+  const abortControllerRef = useRef<AbortController | null>(null);
 
   useEffect(() => {
     if (jobSections.length > 0 && !jobSections.some(s => s.name === selectedSection)) {
@@ -90,6 +93,7 @@ function CommandCenter({
     }
 
     setIsLoading(true);
+    abortControllerRef.current = new AbortController();
     const missionId = `RUN-${new Date().toISOString().replace(/[-:.]/g, '').slice(0, -4)}`;
     const missionStartTime = new Date();
     const initialLogs = [`[INIT] Mission ${missionId} started for sector '${selectedSection}'. Deploying agent...`];
@@ -102,6 +106,7 @@ function CommandCenter({
       const response = await fetch('/api/start-automation', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
+        signal: abortControllerRef.current.signal,
         body: JSON.stringify({
           cookie: naukriCookie,
           section: selectedSection,
@@ -142,6 +147,15 @@ function CommandCenter({
             } catch (e) {
               console.error("Failed to parse scraped questions", e);
             }
+          } else if (line.startsWith('VERIFIED_ANSWERS:')) {
+            try {
+              const answers = JSON.parse(line.substring('VERIFIED_ANSWERS:'.length).trim());
+              if (Array.isArray(answers)) {
+                onVerifiedAnswers(answers);
+              }
+            } catch (e) {
+              console.error("Failed to parse verified answers", e);
+            }
           } else {
             displayLogs.push(line);
           }
@@ -154,9 +168,15 @@ function CommandCenter({
       }
 
     } catch (error: any) {
-      const fatalLog = `[FATAL] ${error.message}`;
-      setLogs(prev => [...prev, fatalLog]);
-      tempLogs.push(fatalLog);
+      if (error.name === 'AbortError') {
+        const localAbortLog = `[WARNING] Application disconnected from mission stream.`;
+        setLogs(prev => [...prev, localAbortLog]);
+        tempLogs.push(localAbortLog);
+      } else {
+        const fatalLog = `[FATAL] ${error.message}`;
+        setLogs(prev => [...prev, fatalLog]);
+        tempLogs.push(fatalLog);
+      }
     } finally {
       const endLog = `[END] Mission concluded. Agent returned.`;
       setLogs(prev => [...prev, endLog]);
@@ -179,6 +199,13 @@ function CommandCenter({
   const clearLogs = () => {
     setLogs(['[SYSTEM] Standby. Awaiting mission parameters...']);
   }
+
+  const handleAbort = () => {
+    if (abortControllerRef.current) {
+      abortControllerRef.current.abort();
+      setLogs(prev => [...prev, "[WARNING] Abort signal sent to agent..."]);
+    }
+  };
 
   return (
     <div className="flex-1 overflow-hidden p-6 flex flex-col gap-6">
@@ -235,11 +262,19 @@ function CommandCenter({
               <p>TARGET: <span className="text-orange-400">{selectedSection ? selectedSection.toUpperCase() : 'N/A'}</span></p>
               <p>STATUS: <span className="text-white">{isLoading ? 'ACTIVE' : 'STANDBY'}</span></p>
             </div>
-            <Button onClick={handleStartAutomation} disabled={isLoading || !selectedSection || sectionsError !== null}
-              className="w-full h-12 bg-orange-600 text-white font-bold hover:bg-orange-700 disabled:bg-neutral-700 disabled:text-neutral-400 disabled:cursor-not-allowed transition-colors text-sm tracking-widest"
-            >
-              {isLoading ? "IN PROGRESS..." : "INITIATE MISSION"}
-            </Button>
+            {isLoading ? (
+              <Button onClick={handleAbort}
+                className="w-full h-12 bg-red-600 text-white font-bold hover:bg-red-700 transition-colors text-sm tracking-widest flex items-center justify-center gap-2"
+              >
+                <AlertTriangle className="w-4 h-4" /> ABORT MISSION
+              </Button>
+            ) : (
+              <Button onClick={handleStartAutomation} disabled={!selectedSection || sectionsError !== null}
+                className="w-full h-12 bg-orange-600 text-white font-bold hover:bg-orange-700 disabled:bg-neutral-700 disabled:text-neutral-400 disabled:cursor-not-allowed transition-colors text-sm tracking-widest"
+              >
+                INITIATE MISSION
+              </Button>
+            )}
           </CardContent>
         </Card>
       </div>
@@ -292,6 +327,15 @@ export default function TacticalDashboard() {
   const [questionBank, setQuestionBank] = useLocalStorage<QuestionBankEntry[]>("questionBank", []);
 
   const jobsApplied = appliedJobIds.length;
+
+  useEffect(() => {
+    // Keep the live in-memory store updated for any active missions
+    fetch('/api/update-bank', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ questionBank }),
+    }).catch(console.error);
+  }, [questionBank]);
 
   useEffect(() => {
     const fetchSections = async () => {
@@ -351,6 +395,34 @@ export default function TacticalDashboard() {
     }
   };
 
+  const handleVerifiedAnswers = (answers: QuestionBankEntry[]) => {
+    let changed = false;
+    const updatedBank = [...questionBank];
+
+    for (const verifiedEntry of answers) {
+      if (!verifiedEntry.answer) continue;
+
+      const existingIndex = updatedBank.findIndex(e => e.id === verifiedEntry.id);
+
+      if (existingIndex >= 0) {
+        if (updatedBank[existingIndex].answer !== verifiedEntry.answer) {
+          updatedBank[existingIndex] = {
+            ...updatedBank[existingIndex],
+            answer: verifiedEntry.answer,
+          };
+          changed = true;
+        }
+      } else {
+        updatedBank.push(verifiedEntry);
+        changed = true;
+      }
+    }
+
+    if (changed) {
+      setQuestionBank(updatedBank);
+    }
+  };
+
   const clearAllHistory = () => {
     setMissionLogs([]);
     setAppliedJobIds([]);
@@ -383,6 +455,7 @@ export default function TacticalDashboard() {
           appliedJobIds={appliedJobIds}
           onMissionComplete={handleMissionComplete}
           onQuestionsScraped={handleQuestionsScraped}
+          onVerifiedAnswers={handleVerifiedAnswers}
           jobSections={jobSections}
           sectionsLoading={sectionsLoading}
           sectionsError={sectionsError}
@@ -404,6 +477,7 @@ export default function TacticalDashboard() {
           appliedJobIds={appliedJobIds}
           onMissionComplete={handleMissionComplete}
           onQuestionsScraped={handleQuestionsScraped}
+          onVerifiedAnswers={handleVerifiedAnswers}
           jobSections={jobSections}
           sectionsLoading={sectionsLoading}
           sectionsError={sectionsError}
