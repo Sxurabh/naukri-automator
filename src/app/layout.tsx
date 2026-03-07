@@ -7,6 +7,9 @@ const geistMono = GeistMono;
 export const metadata: Metadata = {
   title: "RozgaarBot",
   description: "One-click job application bot",
+  icons: {
+    icon: "/fav.png",
+  },
 };
 
 export default function RootLayout({

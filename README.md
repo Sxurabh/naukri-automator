@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="public/reticle.svg" width="100" alt="RozgaarBot Logo"/>
+  <img src="public/logo.png" width="150" alt="RozgaarBot Logo"/>
 </p>
 
 <h1 align="center">🤖 RozgaarBot</h1>

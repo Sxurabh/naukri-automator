@@ -521,9 +521,12 @@ export default function TacticalDashboard() {
   return (
     <div className="flex h-screen bg-neutral-950 text-neutral-100">
       <div className="w-72 bg-neutral-900 border-r border-neutral-800 flex-col h-full hidden lg:flex">
-        <div className="p-4 border-b border-neutral-800">
-          <h1 className="text-orange-500 font-bold text-lg tracking-wider">ROZGAARBOT</h1>
-          <p className="text-neutral-500 text-xs">v1.4.0 / AUTOMATOR</p>
+        <div className="p-4 border-b border-neutral-800 flex items-center gap-3">
+          <img src="/logo.png" alt="RozgaarBot Logo" className="w-10 h-10 object-contain rounded" />
+          <div>
+            <h1 className="text-orange-500 font-bold text-lg tracking-wider">ROZGAARBOT</h1>
+            <p className="text-neutral-500 text-xs">v1.4.0 / AUTOMATOR</p>
+          </div>
         </div>
         <nav className="flex-grow p-4 space-y-2">
           {navItems.map(item => (
