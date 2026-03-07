@@ -1,572 +1,561 @@
-// sxurabh/naukri-automator/naukri-automator-2395bd3b0e42cdcc1775f3531cce259c26dbec88/src/app/page.tsx
-"use client";
+import Link from 'next/link';
+import { ArrowRight, Github, Bot, Code, Zap, Layers, Star, User, Check, Target, Clock, Shield, Briefcase } from 'lucide-react';
 
-import { useState, useEffect, useRef } from 'react';
-import { Monitor, Settings, Bot, KeyRound, Briefcase, Target, Archive, X, LoaderCircle, AlertTriangle, CheckCheck, BookOpen } from "lucide-react";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { Button } from "@/components/ui/button";
-import { Textarea } from "@/components/ui/textarea";
-import { AgentLogsPage } from './views/agent-logs';
-import { SettingsPage } from './views/settings';
-import { AppliedJobsPage } from './views/applied-jobs';
-import { QuestionBankPage } from './views/question-bank';
-import useLocalStorage from './lib/hooks/useLocalStorage';
-import type { QuestionBankEntry, ScrapedQuestion } from './lib/questionBank';
-import { mergeIntoBankEntries } from './lib/questionBank';
-
-export interface AppSettings {
-  jobsPerMission: number;
-  stealthMode: boolean;
-  desktopNotifications: boolean;
-  autoFillEnabled: boolean;
-}
-export type SetAppSettings = React.Dispatch<React.SetStateAction<AppSettings>>;
-
-
-interface JobSection {
-  name: string;
-  count: number;
-}
-
-export interface MissionLog {
-  id: string;
-  status: 'Success' | 'Failed' | 'In Progress';
-  jobs: number;
-  section: string;
-  date: string;
-  fullLog: string[];
-}
-
-interface CommandCenterProps {
-  naukriCookie: string;
-  setNaukriCookie: (value: string) => void;
-  appliedJobIds: string[];
-  onMissionComplete: (log: MissionLog, newIds: string[]) => void;
-  onQuestionsScraped: (questions: ScrapedQuestion[]) => void;
-  onVerifiedAnswers: (answers: QuestionBankEntry[]) => void;
-  jobSections: JobSection[];
-  sectionsLoading: boolean;
-  sectionsError: string | null;
-  settings: AppSettings;
-  questionBank: QuestionBankEntry[];
-}
-
-function CommandCenter({
-  naukriCookie,
-  setNaukriCookie,
-  appliedJobIds,
-  onMissionComplete,
-  onQuestionsScraped,
-  onVerifiedAnswers,
-  jobSections,
-  sectionsLoading,
-  sectionsError,
-  settings,
-  questionBank,
-}: CommandCenterProps) {
-  const [selectedSection, setSelectedSection] = useState("");
-  const [logs, setLogs] = useState<string[]>(['[SYSTEM] Standby. Awaiting mission parameters...']);
-  const [isLoading, setIsLoading] = useState(false);
-  const logsEndRef = useRef<HTMLDivElement>(null);
-  const abortControllerRef = useRef<AbortController | null>(null);
-
-  useEffect(() => {
-    if (jobSections.length > 0 && !jobSections.some(s => s.name === selectedSection)) {
-      setSelectedSection(jobSections[0].name);
-    } else if (jobSections.length === 0) {
-      setSelectedSection("");
-    }
-  }, [jobSections, selectedSection]);
-
-  useEffect(() => {
-    logsEndRef.current?.scrollIntoView({ behavior: "smooth" });
-  }, [logs]);
-
-  const handleStartAutomation = async () => {
-    if (!naukriCookie) {
-      setLogs(prev => [...prev, "[ERROR] AGENT_AUTH_TOKEN required for deployment."]);
-      return;
-    }
-    if (!selectedSection) {
-      setLogs(prev => [...prev, "[ERROR] TARGET_SECTOR must be selected."]);
-      return;
-    }
-
-    setIsLoading(true);
-    abortControllerRef.current = new AbortController();
-    const missionId = `RUN-${new Date().toISOString().replace(/[-:.]/g, '').slice(0, -4)}`;
-    const missionStartTime = new Date();
-    const initialLogs = [`[INIT] Mission ${missionId} started for sector '${selectedSection}'. Deploying agent...`];
-    setLogs(initialLogs);
-
-    let tempLogs = [...initialLogs];
-    let newMissionAppliedIds: string[] = [];
-
-    try {
-      const response = await fetch('/api/start-automation', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        signal: abortControllerRef.current.signal,
-        body: JSON.stringify({
-          cookie: naukriCookie,
-          section: selectedSection,
-          appliedJobIds: appliedJobIds,
-          settings: settings,
-          questionBank: questionBank,
-        }),
-      });
-
-      if (!response.body) throw new Error("Response stream not available.");
-
-      const reader = response.body.getReader();
-      const decoder = new TextDecoder();
-
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
-        const chunk = decoder.decode(value, { stream: true });
-        const newLogEntries = chunk.split('\n').filter(Boolean);
-
-        const displayLogs: string[] = [];
-        newLogEntries.forEach(line => {
-          if (line.startsWith('APPLIED_JOB_IDS:')) {
-            try {
-              const ids = JSON.parse(line.substring(line.indexOf(':') + 1));
-              if (Array.isArray(ids)) {
-                newMissionAppliedIds = ids;
-              }
-            } catch (e) {
-              console.error("Failed to parse applied job IDs", e);
-            }
-          } else if (line.startsWith('SCRAPED_QUESTIONS:')) {
-            try {
-              const questions = JSON.parse(line.substring('SCRAPED_QUESTIONS:'.length));
-              if (Array.isArray(questions)) {
-                onQuestionsScraped(questions);
-              }
-            } catch (e) {
-              console.error("Failed to parse scraped questions", e);
-            }
-          } else if (line.startsWith('VERIFIED_ANSWERS:')) {
-            try {
-              const answers = JSON.parse(line.substring('VERIFIED_ANSWERS:'.length).trim());
-              if (Array.isArray(answers)) {
-                onVerifiedAnswers(answers);
-              }
-            } catch (e) {
-              console.error("Failed to parse verified answers", e);
-            }
-          } else {
-            displayLogs.push(line);
-          }
-        });
-
-        if (displayLogs.length > 0) {
-          setLogs(prev => [...prev, ...displayLogs]);
-          tempLogs.push(...displayLogs);
-        }
-      }
-
-    } catch (error: any) {
-      if (error.name === 'AbortError') {
-        const localAbortLog = `[WARNING] Application disconnected from mission stream.`;
-        setLogs(prev => [...prev, localAbortLog]);
-        tempLogs.push(localAbortLog);
-      } else {
-        const fatalLog = `[FATAL] ${error.message}`;
-        setLogs(prev => [...prev, fatalLog]);
-        tempLogs.push(fatalLog);
-      }
-    } finally {
-      const endLog = `[END] Mission concluded. Agent returned.`;
-      setLogs(prev => [...prev, endLog]);
-      tempLogs.push(endLog);
-      setIsLoading(false);
-
-      const missionStatus = tempLogs.some(log => log.includes('FATAL') || log.includes('ERROR')) ? 'Failed' : 'Success';
-
-      onMissionComplete({
-        id: missionId,
-        status: missionStatus,
-        jobs: newMissionAppliedIds.length,
-        section: selectedSection,
-        date: missionStartTime.toUTCString(),
-        fullLog: tempLogs,
-      }, newMissionAppliedIds);
-    }
-  };
-
-  const clearLogs = () => {
-    setLogs(['[SYSTEM] Standby. Awaiting mission parameters...']);
-  }
-
-  const handleAbort = () => {
-    if (abortControllerRef.current) {
-      abortControllerRef.current.abort();
-      setLogs(prev => [...prev, "[WARNING] Abort signal sent to agent..."]);
-    }
-  };
-
-  return (
-    <div className="flex-1 overflow-hidden p-6 flex flex-col gap-6">
-      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-        <Card className="bg-neutral-900 border-neutral-800 flex flex-col">
-          <CardHeader>
-            <CardTitle className="text-sm font-medium text-neutral-300 tracking-wider flex items-center gap-2"><KeyRound className="w-4 h-4 text-orange-500" />AGENT AUTH TOKEN</CardTitle>
-          </CardHeader>
-          <CardContent className="flex-grow">
-            <Textarea
-              id="cookie"
-              className="h-full resize-none bg-neutral-950 border-neutral-700 text-green-400 placeholder:text-neutral-500 focus:ring-orange-500"
-              placeholder="Paste nauk_at cookie..."
-              value={naukriCookie}
-              onChange={(e) => setNaukriCookie(e.target.value)}
-            />
-          </CardContent>
-        </Card>
-        <Card className="bg-neutral-900 border-neutral-800 flex flex-col">
-          <CardHeader>
-            <CardTitle className="text-sm font-medium text-neutral-300 tracking-wider flex items-center gap-2"><Briefcase className="w-4 h-4 text-orange-500" />TARGET SECTOR</CardTitle>
-          </CardHeader>
-          <CardContent className="grid grid-cols-2 gap-2 flex-grow">
-            {sectionsLoading ? (
-              Array.from({ length: 4 }).map((_, i) => <div key={i} className="h-full bg-neutral-800 animate-pulse rounded-md"></div>)
-            ) : sectionsError ? (
-              <div className="col-span-2 flex items-center justify-center text-xs text-red-400 text-center p-4 bg-red-500/10 border border-red-500/20 rounded-md">
-                <div className="flex flex-col items-center gap-2">
-                  <AlertTriangle className="w-6 h-6" />
-                  <p>{sectionsError}</p>
-                </div>
-              </div>
-            ) : jobSections.length > 0 ? (
-              jobSections.map(section => (
-                <Button key={section.name} variant="outline" onClick={() => setSelectedSection(section.name)}
-                  className={`justify-center text-xs h-full ${selectedSection === section.name ? 'bg-orange-500/20 border-orange-500/50 text-orange-300' : 'border-neutral-700 text-neutral-400 hover:bg-neutral-800 hover:text-neutral-300 bg-transparent'}`}
-                >
-                  {section.name.toUpperCase()} ({section.count})
-                </Button>
-              ))
-            ) : (
-              <div className="col-span-2 flex items-center justify-center text-xs text-neutral-500">
-                <p>Enter your auth token to load sections.</p>
-              </div>
-            )}
-          </CardContent>
-        </Card>
-        <Card className="bg-neutral-900 border-neutral-800 flex flex-col">
-          <CardHeader>
-            <CardTitle className="text-sm font-medium text-neutral-300 tracking-wider flex items-center gap-2"><Target className="w-4 h-4 text-orange-500" />MISSION CONTROL</CardTitle>
-          </CardHeader>
-          <CardContent className="flex flex-col gap-4 flex-grow justify-between">
-            <div className="text-xs text-neutral-400 border border-neutral-800 bg-neutral-950 p-3 rounded-md space-y-1">
-              <p>TARGET: <span className="text-orange-400">{selectedSection ? selectedSection.toUpperCase() : 'N/A'}</span></p>
-              <p>STATUS: <span className="text-white">{isLoading ? 'ACTIVE' : 'STANDBY'}</span></p>
-            </div>
-            {isLoading ? (
-              <Button onClick={handleAbort}
-                className="w-full h-12 bg-red-600 text-white font-bold hover:bg-red-700 transition-colors text-sm tracking-widest flex items-center justify-center gap-2"
-              >
-                <AlertTriangle className="w-4 h-4" /> ABORT MISSION
-              </Button>
-            ) : (
-              <Button onClick={handleStartAutomation} disabled={!selectedSection || sectionsError !== null}
-                className="w-full h-12 bg-orange-600 text-white font-bold hover:bg-orange-700 disabled:bg-neutral-700 disabled:text-neutral-400 disabled:cursor-not-allowed transition-colors text-sm tracking-widest"
-              >
-                INITIATE MISSION
-              </Button>
-            )}
-          </CardContent>
-        </Card>
-      </div>
-      <Card className="bg-neutral-900 border-neutral-800 flex-grow flex flex-col min-h-0">
-        <CardHeader className="flex flex-row items-center justify-between">
-          <CardTitle className="text-sm font-medium text-neutral-300 tracking-wider flex items-center gap-2"><Bot className="w-4 h-4 text-orange-500" />LIVE MISSION FEED</CardTitle>
-          <Button variant="ghost" size="icon" className="h-7 w-7 text-neutral-400 hover:text-white" onClick={clearLogs}>
-            <X className="w-4 h-4" />
-          </Button>
-        </CardHeader>
-        <CardContent className="flex-grow overflow-hidden">
-          <div id="system-log" className="h-full text-xs overflow-y-auto pr-2 space-y-2 font-mono custom-scrollbar">
-            {logs.map((log, index) => {
-              const color = log.includes('ERROR') || log.includes('FATAL') ? 'text-red-400' : log.includes('WARN') ? 'text-yellow-400' : log.includes('SUCCESS') ? 'text-green-400' : log.includes('[INIT]') || log.includes('[END]') ? 'text-orange-400' : 'text-neutral-400';
-              return (
-                <p key={index} className="whitespace-pre-wrap">
-                  <span className="text-neutral-600 mr-2">&gt;</span>
-                  <span className={color}>{log}</span>
-                </p>
-              );
-            })}
-            {isLoading && <p className="text-yellow-400 animate-pulse"> &gt; Agent active. Awaiting field response...</p>}
-            <div ref={logsEndRef} />
-          </div>
-        </CardContent>
-      </Card>
-    </div>
-  )
-}
-
-export default function TacticalDashboard() {
-  const [activeSection, setActiveSection] = useState("center");
-  const [currentTime, setCurrentTime] = useState("...");
-  const [missionLogs, setMissionLogs] = useLocalStorage<MissionLog[]>("missionLogs", []);
-  const [lastRun, setLastRun] = useLocalStorage("lastRun", "N/A");
-  const [appliedJobIds, setAppliedJobIds] = useState<string[]>([]);
-  const [naukriCookie, setNaukriCookie] = useLocalStorage("naukriCookie", "");
-
-  const [jobSections, setJobSections] = useState<JobSection[]>([]);
-  const [sectionsLoading, setSectionsLoading] = useState(false);
-  const [sectionsError, setSectionsError] = useState<string | null>(null);
-
-  const [settings, setSettings] = useLocalStorage<AppSettings>("naukriAutomatorSettings", {
-    jobsPerMission: 5,
-    stealthMode: true,
-    desktopNotifications: false,
-    autoFillEnabled: false,
-  });
-
-  const [questionBank, setQuestionBank] = useState<QuestionBankEntry[]>([]);
-  const [isDbLoaded, setIsDbLoaded] = useState(false);
-
-  const jobsApplied = appliedJobIds.length;
-
-  useEffect(() => {
-    const initDB = async () => {
-      try {
-        await fetch('/api/db/init');
-        const [qRes, jRes] = await Promise.all([
-          fetch('/api/db/questions'),
-          fetch('/api/db/jobs')
-        ]);
-        if (qRes.ok) {
-          const questions = await qRes.json();
-          setQuestionBank(questions);
-        }
-        if (jRes.ok) {
-          const jobs = await jRes.json();
-          setAppliedJobIds(jobs);
-        }
-        setIsDbLoaded(true);
-      } catch (err) {
-        console.error("Failed to initialize or fetch DB:", err);
-        setIsDbLoaded(true);
-      }
-    };
-    initDB();
-  }, []);
-
-  useEffect(() => {
-    // Keep the live SQLite store updated for any active missions
-    // This runs when questionBank state changes manually.
-    if (isDbLoaded && questionBank.length > 0) {
-      fetch('/api/db/questions', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ questionBank }),
-      }).catch(console.error);
-    }
-  }, [questionBank, isDbLoaded]);
-
-  useEffect(() => {
-    const fetchSections = async () => {
-      if (!naukriCookie) {
-        setJobSections([]);
-        setSectionsError(null);
-        return;
-      }
-      setSectionsLoading(true);
-      setSectionsError(null);
-      try {
-        const response = await fetch('/api/get-sections', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ cookie: naukriCookie }),
-        });
-        if (!response.ok) {
-          if (response.status === 401) {
-            const data = await response.json();
-            throw new Error(data.error || "Authentication failed. Please update your token.");
-          }
-          throw new Error("Failed to fetch sections from server.");
-        }
-        const data = await response.json();
-        if (data.length === 0) {
-          throw new Error("No job sections found. The page might have changed or the cookie is partially invalid.");
-        }
-        setJobSections(data);
-      } catch (error: any) {
-        console.error(error);
-        setSectionsError(error.message);
-        setJobSections([]);
-      } finally {
-        setSectionsLoading(false);
-      }
-    };
-
-    const debounceFetch = setTimeout(() => {
-      fetchSections();
-    }, 500);
-
-    return () => clearTimeout(debounceFetch);
-  }, [naukriCookie]);
-
-  const handleMissionComplete = (log: MissionLog, newIds: string[]) => {
-    setMissionLogs(prev => [log, ...prev].slice(0, 100));
-    if (log.status === 'Success' && newIds.length > 0) {
-      setLastRun(log.date);
-      setAppliedJobIds(prev => {
-        const updatedIds = [...new Set([...prev, ...newIds])];
-        return updatedIds;
-      });
-      // Fire-and-forget save to DB
-      fetch('/api/db/jobs', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ jobIds: newIds }),
-      }).catch(console.error);
-    }
-  };
-
-  const handleQuestionsScraped = (questions: ScrapedQuestion[]) => {
-    setQuestionBank(prevBank => {
-      const { updatedBank } = mergeIntoBankEntries(prevBank, questions);
-      return updatedBank;
-    });
-  };
-
-  const handleVerifiedAnswers = (answers: QuestionBankEntry[]) => {
-    setQuestionBank(prevBank => {
-      let changed = false;
-      const updatedBank = [...prevBank];
-
-      for (const verifiedEntry of answers) {
-        if (!verifiedEntry.answer) continue;
-
-        const existingIndex = updatedBank.findIndex(e => e.id === verifiedEntry.id);
-
-        if (existingIndex >= 0) {
-          if (updatedBank[existingIndex].answer !== verifiedEntry.answer) {
-            updatedBank[existingIndex] = {
-              ...updatedBank[existingIndex],
-              answer: verifiedEntry.answer,
-            };
-            changed = true;
-          }
-        } else {
-          updatedBank.push(verifiedEntry);
-          changed = true;
-        }
-      }
-
-      return changed ? updatedBank : prevBank;
-    });
-  };
-
-  const clearAllHistory = () => {
-    setMissionLogs([]);
-    setAppliedJobIds([]);
-    setLastRun("N/A");
-  };
-
-  useEffect(() => {
-    const intervalId = setInterval(() => {
-      setCurrentTime(new Date().toUTCString());
-    }, 1000);
-    return () => clearInterval(intervalId);
-  }, []);
-
-  const unansweredCount = questionBank.filter(q => !q.answer).length;
-
-  const navItems = [
-    { id: 'center', label: 'COMMAND CENTER', icon: Monitor },
-    { id: 'applied', label: 'APPLIED JOBS', icon: CheckCheck },
-    { id: 'qbank', label: 'QUESTION BANK', icon: BookOpen, badge: unansweredCount > 0 ? unansweredCount : undefined },
-    { id: 'logs', label: 'MISSION ARCHIVE', icon: Archive },
-    { id: 'settings', label: 'SETTINGS', icon: Settings },
-  ]
-
-  const renderContent = () => {
+export default function LandingPage() {
     return (
-      <>
-        <div className={`flex-1 overflow-hidden flex flex-col ${activeSection === 'center' ? '' : 'hidden'}`}>
-          <CommandCenter
-            naukriCookie={naukriCookie}
-            setNaukriCookie={setNaukriCookie}
-            appliedJobIds={appliedJobIds}
-            onMissionComplete={handleMissionComplete}
-            onQuestionsScraped={handleQuestionsScraped}
-            onVerifiedAnswers={handleVerifiedAnswers}
-            jobSections={jobSections}
-            sectionsLoading={sectionsLoading}
-            sectionsError={sectionsError}
-            settings={settings}
-            questionBank={questionBank}
-          />
+        <div className="min-h-screen bg-black text-white font-inter relative overflow-x-hidden selection-red">
+            {/* Global Background */}
+            <div className="fixed inset-0 z-0 pointer-events-none">
+                <div className="absolute inset-0 bg-gradient-to-b from-[#1a0505] to-black"></div>
+                <div className="absolute top-0 left-0 w-[1px] h-[1px] bg-transparent stars-1 animate-[animStar_50s_linear_infinite]"></div>
+                <div className="absolute top-0 left-0 w-[2px] h-[2px] bg-transparent stars-2 animate-[animStar_80s_linear_infinite]"></div>
+                <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-[800px] h-[800px] bg-red-600/5 rounded-full blur-[120px]"></div>
+                <div className="absolute inset-0 bg-[linear-gradient(rgba(255,255,255,0.03)_1px,transparent_1px),linear-gradient(90deg,rgba(255,255,255,0.03)_1px,transparent_1px)] bg-[size:40px_40px] [mask-image:radial-gradient(circle_at_center,black_40%,transparent_80%)]"></div>
+            </div>
+
+            {/* Top Blur Header */}
+            <div className="gradient-blur"></div>
+
+            {/* Navbar */}
+            <header className="fixed top-0 left-0 w-full z-50 pt-6 px-4">
+                <nav className="max-w-5xl mx-auto flex items-center justify-between bg-black/60 backdrop-blur-xl border border-white/10 rounded-full px-6 py-3 shadow-2xl">
+                    <div className="flex items-center gap-2">
+                        <div className="w-5 h-5 bg-[#ef233c] rounded-sm rotate-45"></div>
+                        <span className="text-lg font-bold font-manrope tracking-tight">RozgaarBot</span>
+                    </div>
+
+                    <div className="hidden md:flex items-center gap-8">
+                        <a href="#features" className="text-sm font-medium text-zinc-400 hover:text-white transition-colors">Features</a>
+                        <a href="#how-it-works" className="text-sm font-medium text-zinc-400 hover:text-white transition-colors">How It Works</a>
+                        <a href="#roadmap" className="text-sm font-medium text-zinc-400 hover:text-white transition-colors">Roadmap</a>
+                        <a href="#pricing" className="text-sm font-medium text-zinc-400 hover:text-white transition-colors">Pricing</a>
+                    </div>
+
+                    <div className="flex items-center gap-4">
+                        <Link href="/dashboard" className="hidden md:block text-sm font-medium text-zinc-300 hover:text-white">
+                            Dashboard
+                        </Link>
+                        <Link href="/dashboard" className="group relative inline-flex items-center justify-center overflow-hidden rounded-full bg-white/5 px-6 py-2 transition-transform active:scale-95">
+                            <span className="absolute inset-0 border border-white/10 rounded-full"></span>
+                            <span className="absolute inset-[-100%] animate-[spin_3s_linear_infinite] bg-[conic-gradient(from_90deg_at_50%_50%,transparent_0%,transparent_75%,#ef233c_100%)] opacity-0 group-hover:opacity-100 transition-opacity"></span>
+                            <span className="absolute inset-[1px] rounded-full bg-black"></span>
+                            <span className="relative z-10 flex items-center gap-2 text-xs font-bold uppercase tracking-wider">
+                                Start Mission <ArrowRight className="w-3 h-3 group-hover:translate-x-0.5 transition-transform" />
+                            </span>
+                        </Link>
+                    </div>
+                </nav>
+            </header>
+
+            <main className="relative z-10">
+                {/* Hero Section */}
+                <section className="min-h-screen flex flex-col items-center justify-center pt-32 pb-20 px-6">
+                    <div className="text-center max-w-5xl mx-auto">
+                        {/* Logo */}
+                        <div
+                            className="mb-8 animate-fade-up"
+                            style={{ animationDelay: '0.05s' }}
+                        >
+                            <img
+                                src="/logo.png"
+                                alt="RozgaarBot Logo"
+                                className="w-20 h-20 mx-auto opacity-90 hover:opacity-100 transition-opacity"
+                            />
+                        </div>
+
+                        <div
+                            className="inline-flex items-center gap-2 px-4 py-1.5 rounded-full bg-white/5 border border-white/10 backdrop-blur-md mb-8 animate-fade-up"
+                            style={{ animationDelay: '0.1s' }}
+                        >
+                            <span className="relative flex h-2 w-2">
+                                <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-red-400 opacity-75"></span>
+                                <span className="relative inline-flex rounded-full h-2 w-2 bg-[#ef233c]"></span>
+                            </span>
+                            <span className="text-xs font-medium text-red-100/90 tracking-wide font-manrope">
+                                v1.4.0 - Tactical Automation Suite
+                            </span>
+                            <ArrowRight className="w-3 h-3 text-red-400" />
+                        </div>
+
+                        <h1
+                            className="text-6xl md:text-8xl font-semibold tracking-tighter font-manrope leading-[1.1] mb-8 animate-fade-up"
+                            style={{ animationDelay: '0.2s' }}
+                        >
+                            <span className="block text-transparent bg-clip-text bg-gradient-to-b from-white via-white to-white/40">
+                                Automate Your Job
+                            </span>
+                            <span className="block text-transparent bg-clip-text bg-gradient-to-b from-white via-white to-white/40">
+                                Hunt{' '}
+                                <span className="text-[#ef233c] inline-block relative">
+                                    Everywhere
+                                    <svg
+                                        className="absolute w-full h-3 -bottom-2 left-0 text-[#ef233c] opacity-60"
+                                        viewBox="0 0 100 10"
+                                        preserveAspectRatio="none"
+                                    >
+                                        <path d="M0 5 Q 50 10 100 5" stroke="currentColor" strokeWidth="2" fill="none" />
+                                    </svg>
+                                </span>
+                            </span>
+                        </h1>
+
+                        <p
+                            className="text-xl md:text-2xl text-zinc-400 max-w-2xl mx-auto mb-12 leading-relaxed animate-fade-up"
+                            style={{ animationDelay: '0.3s' }}
+                        >
+                            Apply to 50+ jobs while you sleep across multiple job portals. RozgaarBot is the AI-powered automation commando that handles bulk applications, learns from screening questions, and keeps you in stealth mode.
+                        </p>
+
+                        <div
+                            className="flex flex-col md:flex-row items-center justify-center gap-6 animate-fade-up"
+                            style={{ animationDelay: '0.4s' }}
+                        >
+                            <Link href="/dashboard" className="shiny-cta group block">
+                                <span className="relative z-10 flex items-center justify-center gap-2 text-white font-medium">
+                                    Initiate Mission <ArrowRight className="transition-transform group-hover:translate-x-1" />
+                                </span>
+                            </Link>
+
+                            <a
+                                href="https://github.com/Sxurabh/rozgaarbot"
+                                target="_blank"
+                                rel="noreferrer"
+                                className="group px-8 py-4 rounded-full bg-zinc-900 border border-zinc-800 text-zinc-300 font-medium hover:text-white hover:bg-zinc-800 transition-all flex items-center gap-2"
+                            >
+                                <Github className="w-5 h-5" />
+                                View on GitHub
+                            </a>
+                        </div>
+                    </div>
+
+                    {/* Stats Strip */}
+                    <div className="w-full mt-32 border-y border-white/5 bg-white/[0.02] backdrop-blur-sm py-10 opacity-60 hover:opacity-100 transition-opacity">
+                        <div className="max-w-7xl mx-auto px-6 flex flex-col md:flex-row items-center gap-8 md:gap-16 justify-around">
+                            <div className="text-center">
+                                <div className="text-3xl font-bold text-[#ef233c] font-manrope">50</div>
+                                <div className="text-sm text-zinc-400">Applications/Mission</div>
+                            </div>
+                            <div className="text-center">
+                                <div className="text-3xl font-bold text-[#ef233c] font-manrope">10x</div>
+                                <div className="text-sm text-zinc-400">Faster Than Manual</div>
+                            </div>
+                            <div className="text-center">
+                                <div className="text-3xl font-bold text-[#ef233c] font-manrope">0</div>
+                                <div className="text-sm text-zinc-400">Manual Clicks Required</div>
+                            </div>
+                            <div className="text-center">
+                                <div className="text-3xl font-bold text-[#ef233c] font-manrope">∞</div>
+                                <div className="text-sm text-zinc-400">Free & Open Source</div>
+                            </div>
+                        </div>
+                    </div>
+                </section>
+
+                {/* Features Bento Grid */}
+                <section id="features" className="py-32 px-6">
+                    <div className="max-w-7xl mx-auto">
+                        <div className="mb-20 text-center max-w-3xl mx-auto animate-fade-up">
+                            <h2 className="text-4xl md:text-5xl font-semibold text-white tracking-tight font-manrope mb-6">
+                                Tactical Features <br />
+                                <span className="text-[#ef233c]">Built for Dominance</span>
+                            </h2>
+                            <p className="text-lg text-zinc-400 font-light">
+                                A complete mission-control platform for job application warfare. Every tool you need to win.
+                            </p>
+                        </div>
+
+                        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4 h-auto lg:h-[700px]">
+                            {/* Main Feature Card */}
+                            <div className="lg:col-span-2 lg:row-span-2 group relative overflow-hidden p-8 border border-white/10 bg-gradient-to-b from-zinc-900/50 to-black hover:border-white/20 transition-all rounded-xl">
+                                <div className="relative z-10 h-full flex flex-col">
+                                    <div className="mb-6 inline-flex p-3 rounded-lg bg-white/5 border border-white/10 text-[#ef233c]">
+                                        <Target className="w-6 h-6" />
+                                    </div>
+                                    <h3 className="text-3xl font-semibold text-white font-manrope mb-4 tracking-tight">
+                                        Intelligent Batch Apply
+                                    </h3>
+                                    <p className="text-zinc-400 text-lg leading-relaxed">
+                                        Apply to jobs in tactical batches of 5. The bot intelligently navigates Naukri's recommendation tabs, auto-fills screening questions, and maintains stealth with human-like delays to avoid detection.
+                                    </p>
+                                    <div className="mt-auto flex items-center justify-between opacity-0 group-hover:opacity-100 transition-opacity transform translate-y-2 group-hover:translate-y-0">
+                                        <span className="text-xs font-mono text-[#ef233c]">ACTIVATE FEATURE</span>
+                                        <ArrowRight className="w-4 h-4 text-[#ef233c]" />
+                                    </div>
+                                </div>
+                                <div
+                                    className="absolute inset-0 opacity-0 group-hover:opacity-10 transition-opacity pointer-events-none"
+                                    style={{ background: 'radial-gradient(circle at top right, #ef233c, transparent 70%)' }}
+                                ></div>
+                            </div>
+
+                            {/* Feature 2 */}
+                            <div className="lg:col-span-2 group relative overflow-hidden p-8 border border-white/10 bg-black hover:border-white/20 transition-all rounded-xl">
+                                <div className="relative z-10 flex flex-col h-full">
+                                    <div className="mb-4 inline-flex p-3 rounded-lg bg-white/5 border border-white/10 text-blue-400">
+                                        <Briefcase className="w-6 h-6" />
+                                    </div>
+                                    <h3 className="text-2xl font-semibold text-white font-manrope mb-2">Smart Question Bank</h3>
+                                    <p className="text-zinc-400">
+                                        Learns screening questions from Naukri forms. Answer once, auto-fill forever. Your intelligence database grows smarter with every application.
+                                    </p>
+                                </div>
+                                <div
+                                    className="absolute inset-0 opacity-0 group-hover:opacity-10 transition-opacity pointer-events-none"
+                                    style={{ background: 'radial-gradient(circle at top right, #3b82f6, transparent 70%)' }}
+                                ></div>
+                            </div>
+
+                            {/* Feature 3 */}
+                            <div className="group relative overflow-hidden p-8 border border-white/10 bg-black hover:border-white/20 transition-all rounded-xl">
+                                <div className="relative z-10">
+                                    <div className="mb-4 inline-flex p-3 rounded-lg bg-white/5 border border-white/10 text-yellow-400">
+                                        <Shield className="w-6 h-6" />
+                                    </div>
+                                    <h3 className="text-xl font-semibold text-white font-manrope mb-2">Stealth Mode</h3>
+                                    <p className="text-sm text-zinc-400">
+                                        Randomized delays between actions. Naukri won't know it's a bot. Run missions 24/7 without risk.
+                                    </p>
+                                </div>
+                            </div>
+
+                            {/* Feature 4 */}
+                            <div className="group relative overflow-hidden p-8 border border-white/10 bg-black hover:border-white/20 transition-all rounded-xl">
+                                <div className="relative z-10">
+                                    <div className="mb-4 inline-flex p-3 rounded-lg bg-white/5 border border-white/10 text-purple-400">
+                                        <Clock className="w-6 h-6" />
+                                    </div>
+                                    <h3 className="text-xl font-semibold text-white font-manrope mb-2">Mission Archive</h3>
+                                    <p className="text-sm text-zinc-400">
+                                        Real-time logs, application history, and success metrics. Every mission is tracked.
+                                    </p>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </section>
+
+                {/* How It Works Section */}
+                <section id="how-it-works" className="py-32 px-6 bg-zinc-950/40">
+                    <div className="max-w-7xl mx-auto">
+                        <div className="text-center mb-20 max-w-3xl mx-auto">
+                            <h2 className="text-4xl md:text-5xl font-semibold text-white tracking-tight font-manrope mb-6">
+                                Simple 3-Step <span className="text-[#ef233c]">Mission Protocol</span>
+                            </h2>
+                        </div>
+
+                        <div className="grid grid-cols-1 md:grid-cols-3 gap-8">
+                            {/* Step 1 */}
+                            <div className="relative">
+                                <div className="text-center mb-6">
+                                    <div className="inline-flex items-center justify-center w-16 h-16 rounded-full bg-[#ef233c]/20 border-2 border-[#ef233c] text-[#ef233c] font-bold font-manrope text-2xl">
+                                        1
+                                    </div>
+                                </div>
+                                <h3 className="text-xl font-semibold text-white font-manrope text-center mb-3">Get Your Auth Cookie</h3>
+                                <p className="text-zinc-400 text-center text-sm leading-relaxed">
+                                    Grab your auth token from your job portal. Takes 60 seconds. This is your mission clearance.
+                                </p>
+                            </div>
+
+                            {/* Step 2 */}
+                            <div className="relative">
+                                <div className="text-center mb-6">
+                                    <div className="inline-flex items-center justify-center w-16 h-16 rounded-full bg-[#ef233c]/20 border-2 border-[#ef233c] text-[#ef233c] font-bold font-manrope text-2xl">
+                                        2
+                                    </div>
+                                </div>
+                                <h3 className="text-xl font-semibold text-white font-manrope text-center mb-3">Configure & Launch</h3>
+                                <p className="text-zinc-400 text-center text-sm leading-relaxed">
+                                    Pick your target, set job count (up to 50), toggle stealth mode. Hit "Initiate Mission."
+                                </p>
+                            </div>
+
+                            {/* Step 3 */}
+                            <div className="relative">
+                                <div className="text-center mb-6">
+                                    <div className="inline-flex items-center justify-center w-16 h-16 rounded-full bg-[#ef233c]/20 border-2 border-[#ef233c] text-[#ef233c] font-bold font-manrope text-2xl">
+                                        3
+                                    </div>
+                                </div>
+                                <h3 className="text-xl font-semibold text-white font-manrope text-center mb-3">Watch Live Mission Feed</h3>
+                                <p className="text-zinc-400 text-center text-sm leading-relaxed">
+                                    Real-time logs show every action. Your bot is applying. You're having chai. Perfect execution.
+                                </p>
+                            </div>
+                        </div>
+                    </div>
+                </section>
+
+                {/* Roadmap Section */}
+                <section id="roadmap" className="py-32 px-6">
+                    <div className="max-w-7xl mx-auto">
+                        <div className="text-center mb-20 max-w-3xl mx-auto">
+                            <h2 className="text-4xl md:text-5xl font-semibold text-white tracking-tight font-manrope mb-6">
+                                The Grand Vision of <span className="text-[#ef233c]">Rozgaar Domination</span>
+                            </h2>
+                            <p className="text-lg text-zinc-400 font-light">
+                                Where RozgaarBot is headed. Multi-portal automation. AI intelligence. Your complete job hunting arsenal.
+                            </p>
+                        </div>
+
+                        <div className="space-y-8">
+                            {/* Phase 1 */}
+                            <div className="p-8 border border-[#ef233c]/30 bg-zinc-900/20 rounded-xl hover:border-[#ef233c]/60 transition-all">
+                                <div className="flex items-center gap-4 mb-4">
+                                    <div className="inline-flex items-center justify-center w-10 h-10 rounded-full bg-[#ef233c] text-white font-bold font-manrope text-sm">✓</div>
+                                    <h3 className="text-2xl font-bold text-white font-manrope">Phase 1 — Naukri.com</h3>
+                                    <span className="ml-auto text-xs text-[#ef233c] font-bold uppercase tracking-widest">Current</span>
+                                </div>
+                                <p className="text-zinc-400 mb-4">Full automation suite for Naukri.com</p>
+                                <ul className="grid grid-cols-2 gap-2 text-sm text-zinc-300">
+                                    <li className="flex items-center gap-2"><span className="text-[#ef233c]">✓</span> Bulk apply</li>
+                                    <li className="flex items-center gap-2"><span className="text-[#ef233c]">✓</span> Smart batch applying</li>
+                                    <li className="flex items-center gap-2"><span className="text-[#ef233c]">✓</span> Stealth mode</li>
+                                    <li className="flex items-center gap-2"><span className="text-[#ef233c]">✓</span> Question Bank</li>
+                                    <li className="flex items-center gap-2"><span className="text-[#ef233c]">✓</span> Mission archive</li>
+                                    <li className="flex items-center gap-2"><span className="text-[#ef233c]">✓</span> Docker support</li>
+                                </ul>
+                            </div>
+
+                            {/* Phase 2 */}
+                            <div className="p-8 border border-white/10 bg-black rounded-xl hover:border-white/20 transition-all">
+                                <div className="flex items-center gap-4 mb-4">
+                                    <div className="inline-flex items-center justify-center w-10 h-10 rounded-full bg-white/10 text-white font-bold font-manrope text-sm">🔄</div>
+                                    <h3 className="text-2xl font-bold text-white font-manrope">Phase 2 — Indian Job Portals</h3>
+                                </div>
+                                <p className="text-zinc-400 mb-4">Expand to major Indian job platforms</p>
+                                <ul className="grid grid-cols-2 gap-2 text-sm text-zinc-300">
+                                    <li>• Shine.com</li>
+                                    <li>• TimesJobs</li>
+                                    <li>• Freshersworld</li>
+                                    <li>• Instahyre</li>
+                                    <li>• Hirist.tech</li>
+                                    <li>• foundit (Monster India)</li>
+                                </ul>
+                                <p className="text-xs text-zinc-500 mt-4">+ Unified dashboard for all portals</p>
+                            </div>
+
+                            {/* Phase 3 */}
+                            <div className="p-8 border border-white/10 bg-black rounded-xl hover:border-white/20 transition-all">
+                                <div className="flex items-center gap-4 mb-4">
+                                    <div className="inline-flex items-center justify-center w-10 h-10 rounded-full bg-white/10 text-white font-bold font-manrope text-sm">🌍</div>
+                                    <h3 className="text-2xl font-bold text-white font-manrope">Phase 3 — Global Expansion</h3>
+                                </div>
+                                <p className="text-zinc-400 mb-4">Go worldwide with international platforms</p>
+                                <ul className="grid grid-cols-2 gap-2 text-sm text-zinc-300">
+                                    <li>• LinkedIn Easy Apply</li>
+                                    <li>• Indeed</li>
+                                    <li>• Internshala</li>
+                                    <li>• Wellfound (AngelList)</li>
+                                    <li>• Glassdoor</li>
+                                </ul>
+                            </div>
+
+                            {/* Phase 4 */}
+                            <div className="p-8 border border-white/10 bg-black rounded-xl hover:border-white/20 transition-all">
+                                <div className="flex items-center gap-4 mb-4">
+                                    <div className="inline-flex items-center justify-center w-10 h-10 rounded-full bg-white/10 text-white font-bold font-manrope text-sm">🧠</div>
+                                    <h3 className="text-2xl font-bold text-white font-manrope">Phase 4 — AI Intelligence</h3>
+                                </div>
+                                <p className="text-zinc-400 mb-4">Smart filtering and personalization</p>
+                                <ul className="grid grid-cols-2 gap-2 text-sm text-zinc-300">
+                                    <li>• AI Resume Tailoring</li>
+                                    <li>• Smart Filtering</li>
+                                    <li>• Duplicate Detection</li>
+                                    <li>• Application Score</li>
+                                    <li>• Cover Letter Generator</li>
+                                </ul>
+                            </div>
+
+                            {/* Phase 5 */}
+                            <div className="p-8 border border-white/10 bg-black rounded-xl hover:border-white/20 transition-all">
+                                <div className="flex items-center gap-4 mb-4">
+                                    <div className="inline-flex items-center justify-center w-10 h-10 rounded-full bg-white/10 text-white font-bold font-manrope text-sm">🚀</div>
+                                    <h3 className="text-2xl font-bold text-white font-manrope">Phase 5 — The Endgame</h3>
+                                </div>
+                                <p className="text-zinc-400 mb-4">Complete automation ecosystem</p>
+                                <ul className="grid grid-cols-2 gap-2 text-sm text-zinc-300">
+                                    <li>• Interview Scheduler Bot</li>
+                                    <li>• Multi-profile Support</li>
+                                    <li>• Analytics Dashboard</li>
+                                    <li>• Mobile App</li>
+                                </ul>
+                            </div>
+                        </div>
+
+                        <div className="mt-12 p-8 bg-[#ef233c]/10 border border-[#ef233c]/30 rounded-xl text-center">
+                            <p className="text-zinc-300 text-sm">
+                                <strong className="text-white">Currently at Phase 1.</strong> Help us accelerate the roadmap by contributing or starring on GitHub. The job hunting revolution is just beginning.
+                            </p>
+                        </div>
+                    </div>
+                </section>
+
+                {/* Testimonial Banner */}
+                <div className="w-full bg-[#ef233c] py-20 px-6">
+                    <div className="max-w-4xl mx-auto text-center">
+                        <div className="flex justify-center gap-1 text-black mb-6">
+                            <Star className="w-6 h-6 fill-current" />
+                            <Star className="w-6 h-6 fill-current" />
+                            <Star className="w-6 h-6 fill-current" />
+                            <Star className="w-6 h-6 fill-current" />
+                            <Star className="w-6 h-6 fill-current" />
+                        </div>
+                        <h3 className="text-3xl md:text-5xl font-bold text-black font-manrope leading-tight mb-8">
+                            "I applied to 200+ jobs in 2 weeks. Naukri didn't even know it was automated. Landed 3 interviews."
+                        </h3>
+                        <div className="flex items-center justify-center gap-4">
+                            <div className="w-12 h-12 bg-black rounded-full overflow-hidden flex items-center justify-center">
+                                <User className="text-white w-6 h-6" />
+                            </div>
+                            <div className="text-left">
+                                <div className="text-black font-bold text-lg">Priya Singh</div>
+                                <div className="text-black/70 font-medium">SDE @ Tier-1 Startup</div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                {/* Pricing */}
+                <section id="pricing" className="py-32 px-6 bg-black relative border-t border-white/5">
+                    <div className="max-w-7xl mx-auto">
+                        <div className="text-center mb-20">
+                            <h2 className="text-4xl md:text-5xl font-semibold text-white font-manrope mb-4">
+                                Free Forever, <span className="text-[#ef233c]">Always Open Source</span>
+                            </h2>
+                            <p className="text-zinc-400">Host it yourself. No subscription. No limits. No strings.</p>
+                        </div>
+
+                        <div className="flex justify-center">
+                            {/* Self-Hosted Plan */}
+                            <div className="relative max-w-sm w-full p-8 border border-[#ef233c] bg-zinc-900/40 shadow-[0_0_30px_rgba(239,35,60,0.1)] rounded-xl flex flex-col scale-105 z-10">
+                                <div className="absolute -top-3 left-1/2 -translate-x-1/2 bg-[#ef233c] text-white text-[10px] font-bold uppercase tracking-widest px-3 py-1 rounded-full">
+                                    Forever Free
+                                </div>
+                                <h3 className="text-2xl font-bold font-manrope mb-2">Self-Hosted Commando</h3>
+                                <p className="text-zinc-400 text-sm mb-8 h-10">For developers, job seekers, and teams that want full control.</p>
+                                <div className="mb-8 flex items-baseline gap-1">
+                                    <span className="text-zinc-500">$</span>
+                                    <span className="text-6xl font-bold text-white">0</span>
+                                    <span className="text-zinc-500 text-sm">/forever</span>
+                                </div>
+                                <ul className="space-y-4 mb-8 flex-1">
+                                    <li className="flex items-center gap-3 text-sm text-zinc-300">
+                                        <Check className="text-[#ef233c] w-5 h-5 flex-shrink-0" /> Unlimited Missions
+                                    </li>
+                                    <li className="flex items-center gap-3 text-sm text-zinc-300">
+                                        <Check className="text-[#ef233c] w-5 h-5 flex-shrink-0" /> Unlimited Job Applications
+                                    </li>
+                                    <li className="flex items-center gap-3 text-sm text-zinc-300">
+                                        <Check className="text-[#ef233c] w-5 h-5 flex-shrink-0" /> Smart Q&A Learning Engine
+                                    </li>
+                                    <li className="flex items-center gap-3 text-sm text-zinc-300">
+                                        <Check className="text-[#ef233c] w-5 h-5 flex-shrink-0" /> Mission Archive & Analytics
+                                    </li>
+                                    <li className="flex items-center gap-3 text-sm text-zinc-300">
+                                        <Check className="text-[#ef233c] w-5 h-5 flex-shrink-0" /> Open Source Code (MIT)
+                                    </li>
+                                    <li className="flex items-center gap-3 text-sm text-zinc-300">
+                                        <Check className="text-[#ef233c] w-5 h-5 flex-shrink-0" /> Community Support
+                                    </li>
+                                </ul>
+                                <Link
+                                    href="/dashboard"
+                                    className="w-full block text-center py-3 px-4 bg-[#ef233c] hover:bg-red-700 text-white rounded-lg text-sm font-bold uppercase tracking-wider transition-all"
+                                >
+                                    Launch Dashboard
+                                </Link>
+                            </div>
+                        </div>
+
+                        <div className="text-center mt-16 max-w-2xl mx-auto">
+                            <p className="text-sm text-zinc-400">
+                                <strong className="text-white">No credit card required.</strong> Run locally on your machine. Your data, your rules. Deploy with Docker in seconds.
+                            </p>
+                        </div>
+                    </div>
+                </section>
+
+                {/* CTA Final */}
+                <section className="py-32 px-6 text-center bg-zinc-950/40">
+                    <div className="max-w-3xl mx-auto">
+                        <h2 className="text-5xl md:text-7xl font-bold font-manrope mb-8 tracking-tighter">
+                            Your Job Hunt <span className="text-[#ef233c]">Awaits</span>
+                        </h2>
+                        <p className="text-xl text-zinc-400 mb-12">
+                            Stop clicking "Apply" 200 times. Let RozgaarBot handle it. Go prepare for those interviews instead.
+                        </p>
+
+                        <div className="flex flex-col sm:flex-row items-center justify-center gap-4">
+                            <Link
+                                href="/dashboard"
+                                className="bg-[#ef233c] hover:bg-red-700 text-white font-bold rounded-full px-8 py-4 transition-all inline-flex items-center gap-2"
+                            >
+                                Open Command Center <ArrowRight className="w-5 h-5" />
+                            </Link>
+                            <a
+                                href="https://github.com/Sxurabh/rozgaarbot"
+                                target="_blank"
+                                rel="noreferrer"
+                                className="px-8 py-4 rounded-full bg-zinc-900 border border-zinc-800 text-zinc-300 font-medium hover:text-white hover:bg-zinc-800 transition-all inline-flex items-center gap-2"
+                            >
+                                <Github className="w-5 h-5" />
+                                Star on GitHub
+                            </a>
+                        </div>
+                    </div>
+                </section>
+            </main>
+
+            {/* Footer */}
+            <footer className="bg-black border-t border-zinc-900 pt-20 pb-10 relative overflow-hidden">
+                <div className="max-w-7xl mx-auto px-6 grid grid-cols-1 md:grid-cols-4 gap-12 mb-24 relative z-10">
+                    <div className="md:col-span-2">
+                        <div className="flex items-center gap-2 mb-6">
+                            <div className="w-5 h-5 bg-[#ef233c] rounded-sm rotate-45"></div>
+                            <span className="text-2xl font-bold font-manrope tracking-tight">RozgaarBot</span>
+                        </div>
+                        <p className="text-zinc-500 max-w-xs leading-relaxed">
+                            AI-powered job application automation for Naukri.com. Apply smarter, not harder. Because your time is valuable.
+                        </p>
+                    </div>
+
+                    <div>
+                        <h4 className="text-xs font-bold text-[#ef233c] uppercase tracking-widest mb-6">Missions</h4>
+                        <ul className="space-y-4 text-zinc-400 text-sm">
+                            <li><Link href="/dashboard" className="hover:text-white transition-colors">Launch Dashboard</Link></li>
+                            <li><a href="https://github.com/Sxurabh/rozgaarbot" target="_blank" rel="noreferrer" className="hover:text-white transition-colors">View Source</a></li>
+                            <li><a href="https://github.com/Sxurabh/rozgaarbot#-how-to-use-step-by-step" target="_blank" rel="noreferrer" className="hover:text-white transition-colors">Quick Start</a></li>
+                            <li><a href="https://github.com/Sxurabh/rozgaarbot/releases" target="_blank" rel="noreferrer" className="hover:text-white transition-colors">Releases</a></li>
+                        </ul>
+                    </div>
+
+                    <div>
+                        <h4 className="text-xs font-bold text-[#ef233c] uppercase tracking-widest mb-6">Community</h4>
+                        <ul className="space-y-4 text-zinc-400 text-sm">
+                            <li><a href="https://github.com/Sxurabh" target="_blank" rel="noreferrer" className="hover:text-white transition-colors">Creator</a></li>
+                            <li><a href="https://github.com/Sxurabh/rozgaarbot/issues" target="_blank" rel="noreferrer" className="hover:text-white transition-colors">Issues</a></li>
+                            <li><a href="https://github.com/Sxurabh/rozgaarbot/pulls" target="_blank" rel="noreferrer" className="hover:text-white transition-colors">Pull Requests</a></li>
+                            <li><a href="https://github.com/Sxurabh/rozgaarbot" target="_blank" rel="noreferrer" className="hover:text-white transition-colors">Star Repo</a></li>
+                        </ul>
+                    </div>
+                </div>
+
+                {/* Huge Footer Text */}
+                <div className="flex justify-center items-center py-10 opacity-20 pointer-events-none">
+                    <h1 className="text-[15vw] leading-none font-bold font-manrope tracking-tighter text-stroke select-none">
+                        AUTOMATED
+                    </h1>
+                </div>
+
+                <div className="max-w-7xl mx-auto px-6 border-t border-zinc-900 pt-8 flex flex-col md:flex-row items-center justify-between text-zinc-600 text-[10px] uppercase tracking-widest">
+                    <p>&copy; {new Date().getFullYear()} RozgaarBot. Made with ❤️ by Developers. MIT License.</p>
+                    <div className="flex gap-6 mt-4 md:mt-0">
+                        <a href="https://github.com/Sxurabh/rozgaarbot" target="_blank" rel="noreferrer" className="hover:text-zinc-400">GitHub</a>
+                        <a href="https://github.com/Sxurabh/rozgaarbot/blob/main/README.md" target="_blank" rel="noreferrer" className="hover:text-zinc-400">Docs</a>
+                    </div>
+                </div>
+            </footer>
         </div>
-        <div className={`flex-1 overflow-hidden flex flex-col ${activeSection === 'applied' ? '' : 'hidden'}`}>
-          <AppliedJobsPage appliedJobIds={appliedJobIds} clearAppliedJobs={clearAllHistory} />
-        </div>
-        <div className={`flex-1 overflow-hidden flex flex-col ${activeSection === 'qbank' ? '' : 'hidden'}`}>
-          <QuestionBankPage questionBank={questionBank} setQuestionBank={setQuestionBank} settings={settings} setSettings={setSettings} />
-        </div>
-        <div className={`flex-1 overflow-hidden flex flex-col ${activeSection === 'logs' ? '' : 'hidden'}`}>
-          <AgentLogsPage missionLogs={missionLogs} clearArchive={clearAllHistory} />
-        </div>
-        <div className={`flex-1 overflow-hidden flex flex-col ${activeSection === 'settings' ? '' : 'hidden'}`}>
-          <SettingsPage settings={settings} setSettings={setSettings} />
-        </div>
-      </>
     );
-  }
-
-  return (
-    <div className="flex h-screen bg-neutral-950 text-neutral-100">
-      <div className="w-72 bg-neutral-900 border-r border-neutral-800 flex-col h-full hidden lg:flex">
-        <div className="p-4 border-b border-neutral-800 flex items-center gap-3">
-          <img src="/logo.png" alt="RozgaarBot Logo" className="w-10 h-10 object-contain rounded" />
-          <div>
-            <h1 className="text-orange-500 font-bold text-lg tracking-wider">ROZGAARBOT</h1>
-            <p className="text-neutral-500 text-xs">v1.4.0 / AUTOMATOR</p>
-          </div>
-        </div>
-        <nav className="flex-grow p-4 space-y-2">
-          {navItems.map(item => (
-            <button key={item.id} onClick={() => setActiveSection(item.id)}
-              className={`w-full flex items-center gap-3 p-3 rounded transition-colors text-left ${activeSection === item.id ? 'bg-orange-500/10 text-orange-400 border border-orange-500/30' : 'text-neutral-400 hover:text-white hover:bg-neutral-800'}`}
-            >
-              <item.icon className="w-5 h-5" />
-              <span className="text-sm font-medium flex-1">{item.label}</span>
-              {'badge' in item && item.badge && (
-                <span className="text-[10px] bg-red-500 text-white rounded-full w-5 h-5 flex items-center justify-center font-bold">{item.badge}</span>
-              )}
-            </button>
-          ))}
-        </nav>
-        <div className="p-4 border-t border-neutral-800">
-          <div className="p-4 bg-neutral-800 border border-neutral-700 rounded">
-            <div className="flex items-center gap-2 mb-2">
-              <div className="w-2 h-2 rounded-full animate-pulse bg-green-500"></div>
-              <span className="text-xs text-green-400">SYSTEM ONLINE</span>
-            </div>
-            <div className="text-xs text-neutral-500 space-y-1">
-              <div>LAST RUN: {lastRun}</div>
-              <div>JOBS APPLIED (TOTAL): {jobsApplied}</div>
-            </div>
-          </div>
-        </div>
-      </div>
-
-      <main className="flex-1 flex flex-col">
-        <div className="h-16 bg-neutral-900 border-b border-neutral-800 flex items-center justify-between px-6 flex-shrink-0">
-          <div className="text-sm text-neutral-400 flex items-center gap-2">
-            TACTICAL COMMAND / <span className="text-orange-500">{navItems.find(i => i.id === activeSection)?.label}</span>
-            {sectionsLoading && <LoaderCircle className="w-4 h-4 animate-spin text-neutral-500" />}
-          </div>
-          <div className="text-xs text-neutral-500">
-            LAST SYNC: {currentTime}
-          </div>
-        </div>
-        {renderContent()}
-      </main>
-    </div>
-  );
 }
