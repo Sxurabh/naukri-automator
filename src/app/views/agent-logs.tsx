@@ -6,7 +6,7 @@ import { Badge } from "@/components/ui/badge";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter, DialogClose } from "@/components/ui/dialog";
 import { Archive, CheckCircle, Search, XCircle, Trash2, AlertTriangle } from 'lucide-react';
 import { Button } from '@/components/ui/button';
-import { MissionLog } from '../page';
+import { MissionLog } from '../dashboard/page';
 
 interface AgentLogsPageProps {
   missionLogs: MissionLog[];
@@ -18,8 +18,8 @@ export function AgentLogsPage({ missionLogs, clearArchive }: AgentLogsPageProps)
   const [searchTerm, setSearchTerm] = useState('');
   const [isClearConfirmOpen, setClearConfirmOpen] = useState(false);
 
-  const filteredLogs = missionLogs.filter(log => 
-    log.id.toLowerCase().includes(searchTerm.toLowerCase()) || 
+  const filteredLogs = missionLogs.filter(log =>
+    log.id.toLowerCase().includes(searchTerm.toLowerCase()) ||
     log.section.toLowerCase().includes(searchTerm.toLowerCase())
   );
 
@@ -44,8 +44,8 @@ export function AgentLogsPage({ missionLogs, clearArchive }: AgentLogsPageProps)
         <CardContent>
           <div className="relative mb-4">
             <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-neutral-400" />
-            <Input 
-              placeholder="Search by Mission ID or Sector..." 
+            <Input
+              placeholder="Search by Mission ID or Sector..."
               className="pl-10 bg-neutral-950 border-neutral-700"
               value={searchTerm}
               onChange={(e) => setSearchTerm(e.target.value)}
@@ -56,10 +56,10 @@ export function AgentLogsPage({ missionLogs, clearArchive }: AgentLogsPageProps)
               <div key={log.id} onClick={() => setSelectedLog(log)} className="grid grid-cols-5 items-center gap-4 p-3 border border-neutral-800 rounded-md hover:bg-neutral-800/50 cursor-pointer">
                 <p className="font-mono text-xs text-white col-span-2">{log.id}</p>
                 <div className="flex items-center gap-2">
-                   {log.status === 'Success' ? <CheckCircle className="w-4 h-4 text-green-500" /> : <XCircle className="w-4 h-4 text-red-500" />}
-                   <Badge variant={log.status === 'Success' ? 'default' : 'destructive'} className={log.status === 'Success' ? 'bg-green-500/10 text-green-400 border-green-500/20' : 'bg-red-500/10 text-red-400 border-red-500/20'}>
+                  {log.status === 'Success' ? <CheckCircle className="w-4 h-4 text-green-500" /> : <XCircle className="w-4 h-4 text-red-500" />}
+                  <Badge variant={log.status === 'Success' ? 'default' : 'destructive'} className={log.status === 'Success' ? 'bg-green-500/10 text-green-400 border-green-500/20' : 'bg-red-500/10 text-red-400 border-red-500/20'}>
                     {log.status}
-                   </Badge>
+                  </Badge>
                 </div>
                 <p className="text-xs text-neutral-400">{log.section}</p>
                 <p className="font-mono text-xs text-neutral-500 text-right">{new Date(log.date).toLocaleTimeString()}</p>
@@ -98,12 +98,12 @@ export function AgentLogsPage({ missionLogs, clearArchive }: AgentLogsPageProps)
           </div>
         </DialogContent>
       </Dialog>
-      
+
       {/* Clear Confirmation Dialog */}
       <Dialog open={isClearConfirmOpen} onOpenChange={setClearConfirmOpen}>
         <DialogContent className="sm:max-w-[425px]">
           <DialogHeader>
-            <DialogTitle className="flex items-center gap-2"><AlertTriangle className="text-red-500"/>Confirm Archive Deletion</DialogTitle>
+            <DialogTitle className="flex items-center gap-2"><AlertTriangle className="text-red-500" />Confirm Archive Deletion</DialogTitle>
             <DialogDescription>
               This will permanently delete all mission logs and reset the total applied jobs counter. This action cannot be undone.
             </DialogDescription>
