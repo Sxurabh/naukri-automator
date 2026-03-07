@@ -50,7 +50,6 @@ That intern is **RozgaarBot**.
 | 📋 **Smart Section Selector** | Auto-detects all your Naukri recommendation tabs — "For You", "Based on Skills", and more. |
 | 🧠 **AI Question Bank** | Learns screening questions from Naukri forms, lets you pre-answer them, then auto-fills next time. |
 | 📊 **Mission Archive** | Full history of every run — dates, counts, logs. Because data is sexy. |
-| ☁️ **GitHub Actions Cloud Mode** | Run it on GitHub's free servers every morning at 10 AM IST. Zero electricity cost. |
 | 🐳 **Docker Ready** | Share with friends — one command and they're in business. Literally. |
 
 ---
@@ -129,34 +128,6 @@ Open **http://localhost:3000**. That's literally it. Go touch grass.
 
 ---
 
-## ☁️ Cloud Mode — Run on GitHub Actions (FREE, Every Morning!)
-
-Why run RozgaarBot manually when GitHub will run it for **free** every morning at 10 AM IST? 
-
-This is peak laziness engineering, and we're proud of it.
-
-### Setup Steps
-
-**Step 1:** Fork this repository to your GitHub account.
-
-**Step 2:** Go to `Settings` → `Secrets and Variables` → `Actions` → `New Repository Secret`
-
-**Step 3:** Add a secret named `NAUKRI_COOKIE` with your `nauk_at` cookie value.
-
-**Step 4:** Go to `Actions` tab → Enable workflows → Done.
-
-**Step 5:** Sit back. Every day at 10:00 AM IST, GitHub will wake up (even if you don't), run RozgaarBot, and apply to jobs on your behalf.
-
-```yaml
-# .github/workflows/naukri-cloud.yml
-schedule:
-  - cron: '30 4 * * *'  # 04:30 UTC = 10:00 AM IST ☀️
-```
-
-> ⚠️ **Cookie Expiry Warning:** Your `nauk_at` cookie eventually expires. When applications stop working, refresh your cookie. It's the only maintenance required. We promise.
-
----
-
 ## 📋 How To Use (Step-by-Step)
 
 ### Step 1: Get Your Naukri Auth Cookie
@@ -208,9 +179,9 @@ Some jobs have sidebar questionnaires. RozgaarBot detects these questions and st
 | **Frontend** | Next.js 15, React 19, TailwindCSS | Fast, modern, looks great |
 | **UI Components** | Radix UI, Lucide Icons | Accessible and clean |
 | **Automation Engine** | Playwright | The best browser automation tool. Period. |
-| **Cloud Automation** | @sparticuz/chromium | Serverless-compatible Chromium for GitHub Actions |
+| **Cloud Automation** | @sparticuz/chromium | Serverless-compatible Chromium |
 | **Containerization** | Docker, Docker Compose | Share with friends in one command |
-| **CI/CD** | GitHub Actions | Free cloud execution on a schedule |
+
 
 ---
 
@@ -236,13 +207,9 @@ rozgaarbot/
 │           ├── applied-jobs.tsx      # 📊 Application history
 │           ├── question-bank.tsx     # 🧠 Q&A manager
 │           └── settings.tsx          # ⚙️ Configuration panel
-├── scripts/
-│   └── run-cloud.ts                  # ☁️ GitHub Actions entry point
 ├── components/ui/                    # Shared UI components
 ├── docker-compose.yml
-├── Dockerfile
-└── .github/workflows/
-    └── naukri-cloud.yml              # ⏰ Scheduled cloud automation
+└── Dockerfile
 ```
 
 ---
@@ -253,7 +220,7 @@ rozgaarbot/
 
 **Account Safety?** Stealth Mode adds human-like delays between actions. Don't set it to apply 50 jobs every 5 minutes and you'll be fine.
 
-**Data Privacy?** Your `nauk_at` cookie is stored locally in your browser / GitHub Secrets. It never leaves your setup. We're not in the business of stealing your job applications.
+**Data Privacy?** Your `nauk_at` cookie is stored locally in your browser. It never leaves your machine. We're not in the business of stealing your job applications.
 
 > ⚠️ **Disclaimer:** Use responsibly. RozgaarBot is a productivity tool, not a magic employment machine. The quality of your resume still matters. Unfortunately.
 
@@ -268,7 +235,6 @@ We're just getting started. Here's where RozgaarBot is headed:
 - [x] Smart batch applying (5 at a time)
 - [x] Stealth mode
 - [x] Question Bank with auto-fill
-- [x] GitHub Actions cloud mode
 - [x] Mission archive & logs
 - [x] Docker support
 
