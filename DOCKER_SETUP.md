@@ -1,6 +1,6 @@
-# 🐳 Naukri Automator — Docker Setup Guide
+# 🐳 RozgaarBot — Docker Setup Guide
 
-Get the Naukri job application bot running on your machine in 3 simple steps!
+Get the RozgaarBot job application agent running on your machine in 3 simple steps!
 
 ---
 
@@ -20,8 +20,8 @@ Download and install it for your OS (Windows / Mac / Linux). Make sure it's **ru
 
 **Option A** — If you have Git:
 ```bash
-git clone https://github.com/Sxurabh/naukri-automator.git
-cd naukri-automator
+git clone https://github.com/Sxurabh/rozgaar-bot.git
+cd rozgaar-bot
 ```
 
 **Option B** — No Git? Download the ZIP from GitHub, extract it, and open a terminal inside the folder.
@@ -40,9 +40,9 @@ docker compose up --build
 
 You'll see logs like:
 ```
-naukri-automator  | ▲ Next.js 15.x
-naukri-automator  |   - Local: http://localhost:3000
-naukri-automator  | ✓ Ready in Xs
+rozgaar-bot  | ▲ Next.js 15.x
+rozgaar-bot  |   - Local: http://localhost:3000
+rozgaar-bot  | ✓ Ready in Xs
 ```
 
 ---
@@ -53,7 +53,7 @@ Open your browser and go to:
 
 ### 👉 **http://localhost:3000**
 
-You'll see the **NAUKRI OPS** tactical dashboard!
+You'll see the **ROZGAARBOT** tactical dashboard!
 
 ---
 
@@ -107,7 +107,8 @@ Or press `Ctrl + C` in the terminal where it's running.
 
 - The bot runs **headlessly** inside Docker (no visible browser window). All progress is shown via **live logs** in the dashboard.
 - Your Naukri cookie is stored locally in your browser's `localStorage` — it's never sent anywhere except to naukri.com.
-- Settings and applied job history persist in your browser between sessions.
+- Application data (job history and question bank) is stored in a local SQLite database, persisted in the `./data` folder on your machine.
+- Your settings are saved in your browser's `localStorage`.
 
 ---
 

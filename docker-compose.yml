@@ -8,6 +8,9 @@ services:
       - NODE_ENV=production
       - DOCKER_MODE=true
       - HEADLESS_MODE=true
+      - DB_PATH=data/naukri-automator.sqlite
+    volumes:
+      - ./data:/app/data
     restart: unless-stopped
     # Increase shared memory size for Chromium
     shm_size: '2gb'

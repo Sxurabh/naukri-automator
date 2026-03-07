@@ -522,7 +522,7 @@ export default function TacticalDashboard() {
     <div className="flex h-screen bg-neutral-950 text-neutral-100">
       <div className="w-72 bg-neutral-900 border-r border-neutral-800 flex-col h-full hidden lg:flex">
         <div className="p-4 border-b border-neutral-800">
-          <h1 className="text-orange-500 font-bold text-lg tracking-wider">NAUKRI OPS</h1>
+          <h1 className="text-orange-500 font-bold text-lg tracking-wider">ROZGAARBOT</h1>
           <p className="text-neutral-500 text-xs">v1.4.0 / AUTOMATOR</p>
         </div>
         <nav className="flex-grow p-4 space-y-2">

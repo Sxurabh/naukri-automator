@@ -5,7 +5,7 @@ import "./globals.css";
 const geistMono = GeistMono;
 
 export const metadata: Metadata = {
-  title: "Naukri Automator",
+  title: "RozgaarBot",
   description: "One-click job application bot",
 };
 

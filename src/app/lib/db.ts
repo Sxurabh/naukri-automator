@@ -2,7 +2,9 @@ import { createClient, Client } from '@libsql/client';
 import path from 'path';
 
 // Define the path to the SQLite database file
-const dbPath = path.resolve(process.cwd(), 'naukri-automator.sqlite');
+const dbPath = process.env.DB_PATH
+    ? path.resolve(process.cwd(), process.env.DB_PATH)
+    : path.resolve(process.cwd(), 'naukri-automator.sqlite');
 
 // Create a singleton instance for the database connection
 let dbInstance: Client | null = null;

@@ -71,6 +71,9 @@ COPY --from=builder /app/package.json ./package.json
 # Install Playwright Chromium browser binary
 RUN npx playwright install chromium
 
+# Create data directory for SQLite database
+RUN mkdir -p /app/data
+
 # Set correct permissions
 RUN chown -R nextjs:nodejs /app
 
