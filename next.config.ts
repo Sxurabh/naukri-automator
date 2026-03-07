@@ -1,8 +1,8 @@
 import type { NextConfig } from "next";
 
 const nextConfig: NextConfig = {
-  // Required for Docker: creates a standalone server bundle
-  output: 'standalone',
+  // Required for Docker: creates a standalone server bundle (disabled on Vercel)
+  output: process.env.VERCEL ? undefined : 'standalone',
 
   // Add playwright to the list of server-external packages
   serverExternalPackages: ['@sparticuz/chromium', 'playwright'],
